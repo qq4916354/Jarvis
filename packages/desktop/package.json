@@ -24,7 +24,7 @@
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
-    "electron-vite": "^2.4.0",
+    "electron-vite": "^5.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

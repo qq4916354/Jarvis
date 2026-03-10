@@ -20,16 +20,20 @@
     "build:web": "npm run -w packages/web build",
     "start": "npm run -w packages/daemon start",
     "lint": "eslint packages/*/src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run -w packages/core test",
+    "test:coverage": "npm run -w packages/core test:coverage"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
-    "eslint": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0"
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
   }
 }
