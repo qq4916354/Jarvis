@@ -2,7 +2,7 @@
   "name": "@jarvis/desktop",
   "version": "0.1.0",
   "private": true,
-  "main": "dist/main/index.js",
+  "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -19,7 +19,8 @@
     "@tanstack/react-query": "^5.60.0",
     "lucide-react": "^0.460.0",
     "tailwindcss": "^4.0.0",
-    "@tailwindcss/vite": "^4.0.0"
+    "@tailwindcss/vite": "^4.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "electron": "^33.0.0",
