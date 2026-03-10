@@ -9,3 +9,4 @@ coverage/
 out/
 *.tsbuildinfo
 packages/desktop/release/
+.omc/
