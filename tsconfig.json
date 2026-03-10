@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@jarvis/core": ["packages/core/src"],
+      "@jarvis/core/*": ["packages/core/src/*"]
+    }
+  },
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/daemon" },
+    { "path": "packages/desktop" },
+    { "path": "packages/web" }
+  ]
+}

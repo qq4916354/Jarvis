@@ -1,0 +1,27 @@
+{
+  "name": "@jarvis/core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "openai": "^4.70.0",
+    "better-sqlite3": "^11.0.0",
+    "ws": "^8.18.0",
+    "node-cron": "^3.0.3",
+    "winston": "^3.14.0",
+    "uuid": "^10.0.0",
+    "eventemitter3": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/ws": "^8.5.0",
+    "@types/node-cron": "^3.0.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.7.0"
+  }
+}
