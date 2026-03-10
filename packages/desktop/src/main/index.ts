@@ -63,51 +63,67 @@ function setupIPC() {
     return manager.delete(id);
   });
 
-  // Agent / Chat
+  // Agent / Chat - CC subprocess with streaming
   ipcMain.handle('agent:chat', async (_event, workspaceId: string, message: string) => {
-    const { ModelService } = await import('@jarvis/core');
+    const { CCSession } = await import('@jarvis/core');
     const { MemoryManager } = await import('@jarvis/core');
 
-    const models = new ModelService();
     const memory = new MemoryManager();
+    const workspace = await (async () => {
+      const { WorkspaceManager } = await import('@jarvis/core');
+      const mgr = new WorkspaceManager();
+      return mgr.get(workspaceId);
+    })();
 
-    // Add user message to memory
-    await memory.addMessage(workspaceId, {
-      id: crypto.randomUUID(),
-      workspaceId,
-      role: 'user',
-      content: message,
-      timestamp: Date.now(),
+    if (!workspace) throw new Error(`Workspace ${workspaceId} not found`);
+
+    // Save user message
+    await memory.addMessage(workspaceId, { role: 'user', content: message });
+
+    const session = new CCSession({
+      workspacePath: workspace.path,
+      systemPrompt: undefined, // Uses soul.md from workspace
     });
 
-    // Get recent context
-    const recentMessages = await memory.getRecentMessages(workspaceId, 50);
-
-    // Stream response
-    const stream = models.chat(
-      recentMessages.map((m) => ({ role: m.role as 'user' | 'assistant' | 'system', content: m.content })),
-      { workspaceId, stream: true }
-    );
-
-    let fullResponse = '';
-    for await (const chunk of stream) {
-      fullResponse += chunk;
-      // Send chunk to renderer
-      mainWindow?.webContents.send('agent:chunk', { workspaceId, chunk });
-      // Also broadcast to WebSocket clients
-      broadcastToWebSocket({ type: 'agent:chunk', workspaceId, chunk });
-    }
-
-    // Save assistant response
-    await memory.addMessage(workspaceId, {
-      id: crypto.randomUUID(),
-      workspaceId,
-      role: 'assistant',
-      content: fullResponse,
-      timestamp: Date.now(),
+    session.on('message', (text) => {
+      mainWindow?.webContents.send('agent:chunk', { workspaceId, chunk: text });
+      broadcastToWebSocket({ type: 'agent:chunk', workspaceId, chunk: text });
     });
 
-    return fullResponse;
+    session.on('thinking', (text) => {
+      mainWindow?.webContents.send('agent:thinking', { workspaceId, text });
+      broadcastToWebSocket({ type: 'agent:thinking', workspaceId, text });
+    });
+
+    session.on('tool_use', (name, input) => {
+      mainWindow?.webContents.send('agent:tool_use', { workspaceId, name, input });
+      broadcastToWebSocket({ type: 'agent:tool_use', workspaceId, name, input });
+    });
+
+    session.on('tool_result', (name, content) => {
+      mainWindow?.webContents.send('agent:tool_result', { workspaceId, name, content });
+      broadcastToWebSocket({ type: 'agent:tool_result', workspaceId, name, content });
+    });
+
+    return new Promise<string>((resolve, reject) => {
+      let fullResponse = '';
+      session.on('message', (text) => { fullResponse += text; });
+      session.on('result', async (text) => {
+        await memory.addMessage(workspaceId, { role: 'assistant', content: text || fullResponse });
+        resolve(text || fullResponse);
+      });
+      session.on('error', (err) => reject(err));
+      session.on('done', (code) => {
+        if (!fullResponse && code !== 0) reject(new Error(`CC exited with code ${code}`));
+        else resolve(fullResponse);
+      });
+      session.send(message);
+    });
+  });
+
+  ipcMain.handle('agent:abort', async () => {
+    // TODO: track active sessions per workspace for abort
+    return { aborted: true };
   });
 
   // Memory operations
@@ -243,6 +259,182 @@ function setupIPC() {
   });
 
   ipcMain.handle('system:getJarvisHome', () => JARVIS_HOME);
+
+  // CC Session (Agent Loop via subprocess)
+  const ccSessions = new Map<string, any>(); // workspaceId -> CCSession
+
+  ipcMain.handle('cc:send', async (_event, workspaceId: string, message: string, options?: any) => {
+    const { CCSession } = await import('@jarvis/core');
+
+    let session = ccSessions.get(workspaceId);
+    if (!session) {
+      const { WorkspaceManager } = await import('@jarvis/core');
+      const wm = new WorkspaceManager();
+      const ws = await wm.get(workspaceId);
+      if (!ws) throw new Error(`Workspace ${workspaceId} not found`);
+
+      session = new CCSession({
+        workspacePath: ws.path,
+        sessionId: options?.sessionId,
+        systemPrompt: options?.systemPrompt,
+        model: options?.model,
+      });
+
+      // Forward all events to renderer
+      session.on('message', (text: string) => {
+        mainWindow?.webContents.send('cc:message', { workspaceId, text });
+        broadcastToWebSocket({ type: 'cc:message', workspaceId, text });
+      });
+      session.on('thinking', (text: string) => {
+        mainWindow?.webContents.send('cc:thinking', { workspaceId, text });
+        broadcastToWebSocket({ type: 'cc:thinking', workspaceId, text });
+      });
+      session.on('tool_use', (name: string, input: any) => {
+        mainWindow?.webContents.send('cc:tool_use', { workspaceId, name, input });
+        broadcastToWebSocket({ type: 'cc:tool_use', workspaceId, name, input });
+      });
+      session.on('tool_result', (name: string, content: string) => {
+        mainWindow?.webContents.send('cc:tool_result', { workspaceId, name, content });
+        broadcastToWebSocket({ type: 'cc:tool_result', workspaceId, name, content });
+      });
+      session.on('result', (text: string, sessionId: string) => {
+        mainWindow?.webContents.send('cc:result', { workspaceId, text, sessionId });
+        broadcastToWebSocket({ type: 'cc:result', workspaceId, text, sessionId });
+      });
+      session.on('error', (error: Error) => {
+        mainWindow?.webContents.send('cc:error', { workspaceId, error: error.message });
+        broadcastToWebSocket({ type: 'cc:error', workspaceId, error: error.message });
+      });
+      session.on('done', (code: number | null) => {
+        mainWindow?.webContents.send('cc:done', { workspaceId, code });
+        broadcastToWebSocket({ type: 'cc:done', workspaceId, code });
+      });
+
+      ccSessions.set(workspaceId, session);
+    }
+
+    session.send(message);
+    return { sessionId: session.getSessionId() };
+  });
+
+  ipcMain.handle('cc:abort', async (_event, workspaceId: string) => {
+    const session = ccSessions.get(workspaceId);
+    if (session) {
+      session.abort();
+      ccSessions.delete(workspaceId);
+    }
+  });
+
+  ipcMain.handle('cc:newSession', async (_event, workspaceId: string) => {
+    ccSessions.delete(workspaceId);
+    return { cleared: true };
+  });
+
+  // Digital Humans
+  ipcMain.handle('dh:list', async () => {
+    const { DigitalHumanManager } = await import('@jarvis/core');
+    const { JARVIS_HOME } = await import('@jarvis/core');
+    const { join } = await import('path');
+    const mgr = new DigitalHumanManager(join(JARVIS_HOME, 'data', 'digital-humans'));
+    return mgr.list();
+  });
+
+  ipcMain.handle('dh:create', async (_event, input) => {
+    const { DigitalHumanManager } = await import('@jarvis/core');
+    const { JARVIS_HOME } = await import('@jarvis/core');
+    const { join } = await import('path');
+    const mgr = new DigitalHumanManager(join(JARVIS_HOME, 'data', 'digital-humans'));
+    return mgr.create(input);
+  });
+
+  ipcMain.handle('dh:update', async (_event, id: string, updates) => {
+    const { DigitalHumanManager } = await import('@jarvis/core');
+    const { JARVIS_HOME } = await import('@jarvis/core');
+    const { join } = await import('path');
+    const mgr = new DigitalHumanManager(join(JARVIS_HOME, 'data', 'digital-humans'));
+    return mgr.update(id, updates);
+  });
+
+  ipcMain.handle('dh:delete', async (_event, id: string) => {
+    const { DigitalHumanManager } = await import('@jarvis/core');
+    const { JARVIS_HOME } = await import('@jarvis/core');
+    const { join } = await import('path');
+    const mgr = new DigitalHumanManager(join(JARVIS_HOME, 'data', 'digital-humans'));
+    return mgr.delete(id);
+  });
+
+  ipcMain.handle('dh:getActivity', async (_event, id: string, limit?: number) => {
+    const { DigitalHumanManager } = await import('@jarvis/core');
+    const { JARVIS_HOME } = await import('@jarvis/core');
+    const { join } = await import('path');
+    const mgr = new DigitalHumanManager(join(JARVIS_HOME, 'data', 'digital-humans'));
+    return mgr.getActivity(id, limit);
+  });
+
+  ipcMain.handle('dh:activity', async (_event, id: string, limit?: number) => {
+    const { DigitalHumanManager } = await import('@jarvis/core');
+    const { JARVIS_HOME } = await import('@jarvis/core');
+    const { join } = await import('path');
+    const mgr = new DigitalHumanManager(join(JARVIS_HOME, 'data', 'digital-humans'));
+    return mgr.getActivity(id, limit);
+  });
+
+  // Providers
+  ipcMain.handle('providers:list', async () => {
+    const { ProviderRegistry } = await import('@jarvis/core');
+    const registry = new ProviderRegistry();
+    return registry.listProviders();
+  });
+
+  ipcMain.handle('providers:update', async (_event, id: string, updates) => {
+    const { ProviderRegistry } = await import('@jarvis/core');
+    const registry = new ProviderRegistry();
+    registry.updateProvider(id, updates);
+    return registry.getProvider(id);
+  });
+
+  ipcMain.handle('providers:models', async () => {
+    const { ProviderRegistry } = await import('@jarvis/core');
+    const registry = new ProviderRegistry();
+    return registry.getAllModels();
+  });
+
+  // Artifacts
+  ipcMain.handle('artifacts:list', async (_event, workspaceId: string) => {
+    const { ArtifactManager } = await import('@jarvis/core');
+    const { WorkspaceManager } = await import('@jarvis/core');
+    const wm = new WorkspaceManager();
+    const ws = await wm.get(workspaceId);
+    if (!ws) return [];
+    const am = new ArtifactManager(ws.path, workspaceId);
+    return am.getArtifacts();
+  });
+
+  ipcMain.handle('artifacts:read', async (_event, workspaceId: string, artifactId: string) => {
+    const { ArtifactManager } = await import('@jarvis/core');
+    const { WorkspaceManager } = await import('@jarvis/core');
+    const wm = new WorkspaceManager();
+    const ws = await wm.get(workspaceId);
+    if (!ws) return null;
+    const am = new ArtifactManager(ws.path, workspaceId);
+    return am.readContent(artifactId);
+  });
+
+  ipcMain.handle('artifacts:tree', async (_event, workspaceId: string) => {
+    const { ArtifactManager } = await import('@jarvis/core');
+    const { WorkspaceManager } = await import('@jarvis/core');
+    const wm = new WorkspaceManager();
+    const ws = await wm.get(workspaceId);
+    if (!ws) return [];
+    const am = new ArtifactManager(ws.path, workspaceId);
+    return am.getFileTree();
+  });
+
+  ipcMain.handle('artifacts:content', async (_event, filePath: string) => {
+    const { readFileSync, existsSync } = await import('fs');
+    if (!existsSync(filePath)) return null;
+    return readFileSync(filePath, 'utf-8');
+  });
 }
 
 // ─── Window Management ───────────────────────────────────────────

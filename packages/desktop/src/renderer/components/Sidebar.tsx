@@ -9,10 +9,13 @@ import {
   Trash2,
   RotateCw,
   ChevronRight,
+  Globe,
+  Users,
+  Layers,
 } from 'lucide-react';
 import { useWorkspaceStore, WorkspaceConfig } from '../stores/workspace-store';
 
-type View = 'chat' | 'settings' | 'models' | 'tools' | 'skills';
+type View = 'chat' | 'settings' | 'models' | 'tools' | 'skills' | 'providers' | 'digitalHumans' | 'browser';
 
 interface SidebarProps {
   currentView: View;
@@ -50,12 +53,18 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
     onViewChange('chat');
   };
 
-  const navItems: { view: View; icon: React.ReactNode; label: string }[] = [
+  const mainNavItems: { view: View; icon: React.ReactNode; label: string }[] = [
     { view: 'chat', icon: <MessageSquare size={18} />, label: 'Chat' },
-    { view: 'settings', icon: <Settings size={18} />, label: 'Settings' },
+    { view: 'digitalHumans', icon: <Users size={18} />, label: 'Digital Humans' },
+    { view: 'browser', icon: <Globe size={18} />, label: 'AI Browser' },
+  ];
+
+  const configNavItems: { view: View; icon: React.ReactNode; label: string }[] = [
+    { view: 'providers', icon: <Layers size={18} />, label: 'Providers' },
     { view: 'models', icon: <Cpu size={18} />, label: 'Models' },
     { view: 'tools', icon: <Wrench size={18} />, label: 'Tools' },
     { view: 'skills', icon: <Zap size={18} />, label: 'CC Skills' },
+    { view: 'settings', icon: <Settings size={18} />, label: 'Settings' },
   ];
 
   return (
@@ -138,13 +147,34 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
         )}
       </div>
 
-      {/* Navigation */}
+      {/* Main Navigation */}
       <nav className="border-t border-[var(--color-border)] p-2">
-        {navItems.map((item) => (
+        {mainNavItems.map((item) => (
           <button
             key={item.view}
             onClick={() => onViewChange(item.view)}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+              currentView === item.view
+                ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
+                : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]'
+            }`}
+          >
+            {item.icon}
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* Config Navigation */}
+      <nav className="border-t border-[var(--color-border)] p-2">
+        <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider px-3 mb-1 block">
+          Config
+        </span>
+        {configNavItems.map((item) => (
+          <button
+            key={item.view}
+            onClick={() => onViewChange(item.view)}
+            className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors ${
               currentView === item.view
                 ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]'

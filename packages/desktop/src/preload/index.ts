@@ -18,10 +18,69 @@ const api = {
   // ─── Agent / Chat ──────────────────────────────────────────
   agent: {
     chat: (workspaceId: string, message: string) => ipcRenderer.invoke('agent:chat', workspaceId, message),
+    abort: () => ipcRenderer.invoke('agent:abort'),
     onChunk: (callback: (data: { workspaceId: string; chunk: string }) => void) => {
       const handler = (_event: any, data: any) => callback(data);
       ipcRenderer.on('agent:chunk', handler);
       return () => ipcRenderer.removeListener('agent:chunk', handler);
+    },
+    onThinking: (callback: (data: { workspaceId: string; text: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('agent:thinking', handler);
+      return () => ipcRenderer.removeListener('agent:thinking', handler);
+    },
+    onToolUse: (callback: (data: { workspaceId: string; name: string; input: any }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('agent:tool_use', handler);
+      return () => ipcRenderer.removeListener('agent:tool_use', handler);
+    },
+    onToolResult: (callback: (data: { workspaceId: string; name: string; content: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('agent:tool_result', handler);
+      return () => ipcRenderer.removeListener('agent:tool_result', handler);
+    },
+  },
+
+  // ─── CC Session (Agent Loop) ────────────────────────────────
+  cc: {
+    send: (workspaceId: string, message: string, options?: any) =>
+      ipcRenderer.invoke('cc:send', workspaceId, message, options),
+    abort: (workspaceId: string) => ipcRenderer.invoke('cc:abort', workspaceId),
+    newSession: (workspaceId: string) => ipcRenderer.invoke('cc:newSession', workspaceId),
+    onMessage: (callback: (data: { workspaceId: string; text: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:message', handler);
+      return () => ipcRenderer.removeListener('cc:message', handler);
+    },
+    onThinking: (callback: (data: { workspaceId: string; text: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:thinking', handler);
+      return () => ipcRenderer.removeListener('cc:thinking', handler);
+    },
+    onToolUse: (callback: (data: { workspaceId: string; name: string; input: any }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:tool_use', handler);
+      return () => ipcRenderer.removeListener('cc:tool_use', handler);
+    },
+    onToolResult: (callback: (data: { workspaceId: string; name: string; content: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:tool_result', handler);
+      return () => ipcRenderer.removeListener('cc:tool_result', handler);
+    },
+    onResult: (callback: (data: { workspaceId: string; text: string; sessionId: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:result', handler);
+      return () => ipcRenderer.removeListener('cc:result', handler);
+    },
+    onError: (callback: (data: { workspaceId: string; error: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:error', handler);
+      return () => ipcRenderer.removeListener('cc:error', handler);
+    },
+    onDone: (callback: (data: { workspaceId: string; code: number | null }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cc:done', handler);
+      return () => ipcRenderer.removeListener('cc:done', handler);
     },
   },
 
@@ -76,6 +135,31 @@ const api = {
   scheduler: {
     startHeartbeat: (workspaceId: string, intervalMs: number) =>
       ipcRenderer.invoke('scheduler:startHeartbeat', workspaceId, intervalMs),
+  },
+
+  // ─── Digital Humans ─────────────────────────────────────────
+  digitalHumans: {
+    list: () => ipcRenderer.invoke('dh:list'),
+    create: (input: any) => ipcRenderer.invoke('dh:create', input),
+    update: (id: string, updates: any) => ipcRenderer.invoke('dh:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('dh:delete', id),
+    getActivity: (id: string, limit?: number) => ipcRenderer.invoke('dh:getActivity', id, limit),
+    activity: (id: string, limit?: number) => ipcRenderer.invoke('dh:activity', id, limit),
+  },
+
+  // ─── Providers ──────────────────────────────────────────────
+  providers: {
+    list: () => ipcRenderer.invoke('providers:list'),
+    update: (id: string, updates: any) => ipcRenderer.invoke('providers:update', id, updates),
+    models: () => ipcRenderer.invoke('providers:models'),
+  },
+
+  // ─── Artifacts ──────────────────────────────────────────────
+  artifacts: {
+    list: (workspaceId: string) => ipcRenderer.invoke('artifacts:list', workspaceId),
+    read: (workspaceId: string, artifactId: string) => ipcRenderer.invoke('artifacts:read', workspaceId, artifactId),
+    tree: (workspaceId: string) => ipcRenderer.invoke('artifacts:tree', workspaceId),
+    content: (filePath: string) => ipcRenderer.invoke('artifacts:content', filePath),
   },
 
   // ─── System ────────────────────────────────────────────────

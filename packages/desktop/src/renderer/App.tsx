@@ -5,9 +5,12 @@ import { SettingsView } from './pages/SettingsView';
 import { ModelsView } from './pages/ModelsView';
 import { ToolsView } from './pages/ToolsView';
 import { SkillsView } from './pages/SkillsView';
+import { ProvidersView } from './pages/ProvidersView';
+import { DigitalHumansView } from './pages/DigitalHumansView';
 import { useWorkspaceStore } from './stores/workspace-store';
+import './i18n';
 
-type View = 'chat' | 'settings' | 'models' | 'tools' | 'skills';
+export type View = 'chat' | 'settings' | 'models' | 'tools' | 'skills' | 'providers' | 'digitalHumans' | 'browser';
 
 export function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -36,7 +39,7 @@ export function App() {
 
         {/* Content Area */}
         <div className="flex-1 overflow-hidden">
-          {!activeWorkspace ? (
+          {!activeWorkspace && currentView === 'chat' ? (
             <WelcomeScreen />
           ) : (
             <>
@@ -45,6 +48,9 @@ export function App() {
               {currentView === 'models' && <ModelsView />}
               {currentView === 'tools' && <ToolsView />}
               {currentView === 'skills' && <SkillsView />}
+              {currentView === 'providers' && <ProvidersView />}
+              {currentView === 'digitalHumans' && <DigitalHumansView />}
+              {currentView === 'browser' && <BrowserPlaceholder />}
             </>
           )}
         </div>
@@ -63,6 +69,19 @@ function WelcomeScreen() {
         </p>
         <p className="text-sm text-[var(--color-text-muted)]">
           Self-evolving AI agent platform
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BrowserPlaceholder() {
+  return (
+    <div className="flex-1 flex items-center justify-center h-full">
+      <div className="text-center">
+        <h2 className="text-xl font-semibold mb-2">AI Browser</h2>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Embedded browser with AI control coming soon
         </p>
       </div>
     </div>
