@@ -494,6 +494,86 @@ export interface VideoGenerationResult {
 }
 
 // ------------------------------------------------------------
+// Evolution Types
+// ------------------------------------------------------------
+
+export interface SubGoal {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  complexity: 'small' | 'medium' | 'large';
+  dependencies: string[];
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+}
+
+export interface LearningInsights {
+  successPatterns: string[];
+  failurePatterns: string[];
+  recommendations: string[];
+  riskFactors: string[];
+}
+
+export interface PlannedChange {
+  file: string;
+  type: 'create' | 'modify' | 'delete';
+  description: string;
+}
+
+export interface ImpactAssessment {
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  affectedModules: string[];
+  breakingChanges: boolean;
+  testingRequired: string[];
+  rollbackPlan: string;
+}
+
+export type EvolutionGoalType = 'bugfix' | 'feature' | 'refactor' | 'optimization';
+
+export type EvolutionPhaseName =
+  | 'research'
+  | 'design'
+  | 'requirements'
+  | 'plan'
+  | 'develop'
+  | 'test';
+
+export interface EvolutionStrategy {
+  name: string;
+  phases: EvolutionPhaseName[];
+  maxDuration: number;
+  safetyChecks: string[];
+}
+
+export interface EvolutionContext {
+  workspacePath: string;
+  goalType: EvolutionGoalType;
+  history: EvolutionCycleRecord[];
+  currentFiles?: string[];
+}
+
+export interface EvolutionPhaseResult {
+  phase: EvolutionPhaseName;
+  success: boolean;
+  output: string;
+  durationMs: number;
+  error?: string;
+}
+
+export interface EvolutionCycleRecord {
+  id: string;
+  goal: string;
+  goalType: EvolutionGoalType;
+  strategy: string;
+  phases: EvolutionPhaseResult[];
+  subGoals: SubGoal[];
+  success: boolean;
+  startedAt: ISOTimestamp;
+  completedAt: ISOTimestamp;
+  error?: string;
+}
+
+// ------------------------------------------------------------
 // Legacy Event type (backward compatibility)
 // ------------------------------------------------------------
 
@@ -522,9 +602,55 @@ export interface JarvisEventMap {
   'task:completed': { taskId: UUID; workspaceId: UUID; result: unknown };
   'task:failed': { taskId: UUID; workspaceId: UUID; error: string };
   'memory:updated': { workspaceId: UUID; memoryType: 'short' | 'long' | 'episodic' };
+  'evolution:start': { goal: string; strategy: string };
+  'evolution:phase': { phase: EvolutionPhaseName; status: 'start' | 'complete' | 'error'; progress: number; message?: string };
+  'evolution:subgoal': { subGoalId: string; title: string; status: SubGoal['status'] };
+  'evolution:complete': { goal: string; success: boolean; durationMs: number; error?: string };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;
+
+// ------------------------------------------------------------
+// Enhanced Memory Types (Semantic Search & Intelligence)
+// ------------------------------------------------------------
+
+/** Options for semantic search over memories. */
+export interface SemanticSearchOptions {
+  /** Maximum number of results to return (default: 10). */
+  limit?: number;
+  /** Minimum similarity threshold 0-1 (default: 0.5). */
+  threshold?: number;
+  /** Filter by memory type. */
+  type?: MemoryType;
+  /** Whether to include the similarity score in results (default: true). */
+  includeScore?: boolean;
+}
+
+/** A single semantic search result with similarity score. */
+export interface SemanticSearchResult {
+  memory: Memory;
+  /** Cosine similarity score between 0 and 1. */
+  score: number;
+}
+
+/** Importance rating for a memory entry. */
+export interface MemoryImportance {
+  memoryId: Id;
+  /** Importance score between 0 (trivial) and 1 (critical). */
+  score: number;
+  /** Brief reason for the assigned score. */
+  reason: string;
+}
+
+/** Result of a memory consolidation operation. */
+export interface ConsolidationResult {
+  /** Number of memories merged into others. */
+  merged: number;
+  /** Number of low-value / expired memories removed. */
+  removed: number;
+  /** Number of memories that remain after consolidation. */
+  remaining: number;
+}
 
 // ------------------------------------------------------------
 // Global Jarvis Configuration (persisted to ~/.jarvis/config.json)

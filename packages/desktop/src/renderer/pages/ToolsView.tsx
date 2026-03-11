@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Wrench, Plus, RefreshCw, Play } from 'lucide-react';
+import { Wrench, Plus, RefreshCw } from 'lucide-react';
 import { useWorkspaceStore } from '../stores/workspace-store';
 import { api } from '../api';
 
@@ -47,64 +47,94 @@ export function ToolsView() {
 
   return (
     <div className="h-full overflow-y-auto p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold">Tools</h2>
-        <button onClick={loadTools} className="p-2 rounded-lg hover:bg-[var(--color-bg-tertiary)]">
-          <RefreshCw size={16} />
-        </button>
+      {/* 页面标题 */}
+      <div className="mb-8 animate-fadeInUp">
+        <h2 className="text-2xl font-bold text-gradient mb-1">Tools</h2>
+        <p className="text-sm text-[var(--color-text-secondary)]">
+          Manage and generate workspace tools
+        </p>
       </div>
 
-      {/* Generate New Tool */}
-      <section className="mb-8 p-4 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)]">
-        <h3 className="text-sm font-semibold mb-3">Generate New Tool (via Claude Code)</h3>
-        <div className="flex gap-3">
+      {/* 生成新工具 */}
+      <section className="card-glow p-5 mb-6 animate-fadeInUp" style={{ animationDelay: '0.05s' }}>
+        <h3 className="text-sm font-semibold mb-3 flex items-center gap-2 text-[var(--color-text)]">
+          <Plus size={14} className="text-[var(--color-primary)]" />
+          Generate New Tool
+          <span className="text-[var(--color-text-muted)] font-normal">via Claude Code</span>
+        </h3>
+        <div className="flex gap-3 items-end">
           <textarea
             value={newToolDesc}
             onChange={(e) => setNewToolDesc(e.target.value)}
             placeholder="Describe the tool you need... e.g., 'A tool that fetches stock prices from Yahoo Finance'"
             rows={2}
-            className="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-sm outline-none focus:border-[var(--color-primary)] resize-none"
+            className="input flex-1"
+            style={{ resize: 'none' }}
           />
           <button
             onClick={handleGenerateTool}
             disabled={isGenerating || !newToolDesc.trim()}
-            className="px-4 py-2 rounded-lg bg-[var(--color-primary)] text-white text-sm hover:bg-[var(--color-primary-hover)] disabled:opacity-40 self-end"
+            className="btn btn-primary px-4 py-2 whitespace-nowrap"
           >
-            {isGenerating ? <RefreshCw size={14} className="animate-spin" /> : <Plus size={14} />}
+            {isGenerating ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : (
+              <>
+                <Plus size={14} />
+                <span className="ml-1.5 text-sm">Generate</span>
+              </>
+            )}
           </button>
         </div>
       </section>
 
-      {/* Tool List */}
+      {/* 工具列表 */}
       <div className="space-y-2">
-        {tools.map((tool) => (
+        {tools.map((tool, index) => (
           <div
             key={tool.name}
-            className="flex items-center gap-3 p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)]"
+            className="card-glow p-3.5 animate-fadeInUp"
+            style={{ animationDelay: `${index * 40}ms` }}
           >
-            <Wrench size={16} className="text-[var(--color-text-muted)] shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{tool.name}</span>
-                {tool.builtIn && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
-                    Built-in
-                  </span>
-                )}
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[var(--color-bg-tertiary)] flex items-center justify-center shrink-0">
+                <Wrench size={14} className="text-[var(--color-primary)]" />
               </div>
-              <p className="text-xs text-[var(--color-text-muted)] truncate">{tool.description}</p>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-[var(--color-text)]">{tool.name}</span>
+                  {tool.builtIn && (
+                    <span className="badge badge-primary" style={{ fontSize: '10px' }}>Built-in</span>
+                  )}
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">{tool.description}</p>
+              </div>
             </div>
-            <button className="p-2 rounded-lg hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
-              <Play size={14} />
-            </button>
           </div>
         ))}
 
         {tools.length === 0 && (
-          <p className="text-sm text-[var(--color-text-muted)] text-center py-8">
-            No tools loaded. Built-in tools will appear when the core is initialized.
-          </p>
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-14 h-14 rounded-full bg-[var(--color-bg-tertiary)] flex items-center justify-center mx-auto mb-4">
+              <Wrench size={24} className="text-[var(--color-text-muted)] opacity-40" />
+            </div>
+            <p className="text-sm text-[var(--color-text-muted)]">No tools loaded.</p>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">
+              Built-in tools will appear when the core is initialized.
+            </p>
+          </div>
         )}
+      </div>
+
+      {/* 刷新按钮（右下角） */}
+      <div className="flex justify-end mt-4">
+        <button
+          onClick={loadTools}
+          className="btn btn-ghost p-2"
+          title="Refresh"
+        >
+          <RefreshCw size={15} />
+        </button>
       </div>
     </div>
   );

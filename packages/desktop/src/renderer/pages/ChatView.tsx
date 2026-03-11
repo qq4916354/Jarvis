@@ -1,133 +1,127 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Send, Square, Globe, PanelRightOpen, PanelRightClose } from 'lucide-react';
-import { useWorkspaceStore, Message } from '../stores/workspace-store';
-import { ThinkingProcess } from '../components/ThinkingProcess';
-import { ToolCallDisplay, ToolCallInfo } from '../components/ToolCallDisplay';
-import { ArtifactPanel } from '../components/ArtifactPanel';
+import {
+  Send, Square, Sparkles, Bot, Brain,
+  ChevronDown, ChevronRight, Terminal, Check, X,
+  Loader, FileText, Pencil, Search, Play,
+  Trash2, Plus, AlertTriangle,
+} from 'lucide-react';
+import { useWorkspaceStore, ChatMessage, ContentBlock, ChatSession, EMPTY_SESSION } from '../stores/workspace-store';
+import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { api } from '../api';
 
+// ─── Tool icon mapping ──────────────────────────────────────────
+
+const TOOL_ICONS: Record<string, React.ReactNode> = {
+  Read: <FileText size={12} />,
+  Write: <Pencil size={12} />,
+  Edit: <Pencil size={12} />,
+  MultiEdit: <Pencil size={12} />,
+  Bash: <Terminal size={12} />,
+  Search: <Search size={12} />,
+  Glob: <Search size={12} />,
+  Grep: <Search size={12} />,
+  LS: <Search size={12} />,
+  TodoRead: <FileText size={12} />,
+  TodoWrite: <Pencil size={12} />,
+  WebFetch: <Search size={12} />,
+  WebSearch: <Search size={12} />,
+};
+
+function getToolIcon(name: string) {
+  return TOOL_ICONS[name] || <Terminal size={12} />;
+}
+
+function getToolLabel(name: string, input: Record<string, unknown> | undefined): string {
+  if (!input) return name;
+  switch (name) {
+    case 'Read':
+      return `Read ${(input.file_path || input.path || '') as string}`;
+    case 'Write':
+      return `Write ${(input.file_path || input.path || '') as string}`;
+    case 'Edit':
+    case 'MultiEdit':
+      return `Edit ${(input.file_path || input.path || '') as string}`;
+    case 'Bash':
+      return `Run: ${String(input.command || '').slice(0, 80)}`;
+    case 'Search':
+    case 'Grep':
+      return `Search: ${String(input.pattern || input.query || '').slice(0, 60)}`;
+    case 'Glob':
+      return `Glob: ${String(input.pattern || '').slice(0, 60)}`;
+    case 'TodoWrite':
+      return 'Update tasks';
+    case 'WebFetch':
+      return `Fetch: ${String(input.url || '').slice(0, 60)}`;
+    case 'WebSearch':
+      return `Search web: ${String(input.query || '').slice(0, 60)}`;
+    default:
+      return name;
+  }
+}
+
+// ─── ChatView ────────────────────────────────────────────────────
+
 export function ChatView() {
-  const {
-    activeWorkspace,
-    messages,
-    isStreaming,
-    streamingContent,
-    sendMessage,
-  } = useWorkspaceStore();
+  const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace);
+  const chatSessions = useWorkspaceStore((s) => s.chatSessions);
+  const sendMessage = useWorkspaceStore((s) => s.sendMessage);
+  const abortStreaming = useWorkspaceStore((s) => s.abortStreaming);
+  const clearSession = useWorkspaceStore((s) => s.clearSession);
+
+  const session: ChatSession = activeWorkspace
+    ? chatSessions[activeWorkspace.id] || EMPTY_SESSION
+    : EMPTY_SESSION;
+
+  const { messages, currentBlocks, isStreaming } = session;
 
   const [input, setInput] = useState('');
-  const [thoughts, setThoughts] = useState<string[]>([]);
-  const [isThinking, setIsThinking] = useState(false);
-  const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
-  const [showArtifacts, setShowArtifacts] = useState(false);
-  const [artifacts, setArtifacts] = useState<any[]>([]);
-  const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
-  const [artifactContent, setArtifactContent] = useState<string | null>(null);
-  const [ccStreaming, setCcStreaming] = useState(false);
-  const [ccContent, setCcContent] = useState('');
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScroll = useRef(true);
 
-  // Subscribe to CC session events
+  // Auto-scroll: only scroll if user is near bottom
   useEffect(() => {
-    const unsubs: (() => void)[] = [];
-
-    unsubs.push(api.cc.onMessage((data: { workspaceId: string; text: string }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setCcContent((prev) => prev + data.text);
-    }));
-
-    unsubs.push(api.cc.onThinking((data: { workspaceId: string; text: string }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setIsThinking(true);
-      setThoughts((prev) => {
-        const last = prev[prev.length - 1];
-        if (last !== undefined) {
-          return [...prev.slice(0, -1), last + data.text];
-        }
-        return [data.text];
-      });
-    }));
-
-    unsubs.push(api.cc.onToolUse((data: { workspaceId: string; name: string; input: any }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setIsThinking(false);
-      const tc: ToolCallInfo = {
-        id: Date.now().toString(),
-        name: data.name,
-        input: data.input,
-        status: 'running',
-      };
-      setToolCalls((prev) => [...prev, tc]);
-    }));
-
-    unsubs.push(api.cc.onToolResult((data: { workspaceId: string; name: string; content: string }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setToolCalls((prev) =>
-        prev.map((tc) =>
-          tc.status === 'running' && tc.name === data.name
-            ? { ...tc, result: data.content, status: 'success' as const }
-            : tc
-        )
-      );
-      setThoughts((prev) => [...prev, '']);
-      setIsThinking(true);
-    }));
-
-    unsubs.push(api.cc.onResult((data: { workspaceId: string; text: string; sessionId: string }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setCcStreaming(false);
-      setIsThinking(false);
-    }));
-
-    unsubs.push(api.cc.onError((data: { workspaceId: string; error: string }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setCcStreaming(false);
-      setIsThinking(false);
-    }));
-
-    unsubs.push(api.cc.onDone((data: { workspaceId: string; code: number | null }) => {
-      if (data.workspaceId !== activeWorkspace?.id) return;
-      setCcStreaming(false);
-      setIsThinking(false);
-    }));
-
-    return () => unsubs.forEach((fn) => fn());
-  }, [activeWorkspace?.id]);
+    const el = containerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const threshold = 100;
+      shouldAutoScroll.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    };
+    el.addEventListener('scroll', handleScroll);
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, ccContent]);
+    if (shouldAutoScroll.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, currentBlocks]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
+  }, [input]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || isStreaming || ccStreaming) return;
+    if (!text || isStreaming || !activeWorkspace) return;
     setInput('');
-    setThoughts([]);
-    setToolCalls([]);
-    setCcContent('');
-    setIsThinking(false);
-
-    if (activeWorkspace) {
-      setCcStreaming(true);
-      api.cc.send(activeWorkspace.id, text)?.catch((err: Error) => {
-        console.error('CC send failed:', err);
-        setCcStreaming(false);
-      });
-      sendMessage(text);
-    } else {
-      sendMessage(text);
-    }
-  }, [input, isStreaming, ccStreaming, activeWorkspace, sendMessage]);
+    shouldAutoScroll.current = true;
+    sendMessage(activeWorkspace.id, text);
+  }, [input, isStreaming, activeWorkspace, sendMessage]);
 
   const handleAbort = useCallback(() => {
-    if (activeWorkspace) {
-      api.cc.abort(activeWorkspace.id);
-      setCcStreaming(false);
-      setIsThinking(false);
-    }
-  }, [activeWorkspace]);
+    if (activeWorkspace) abortStreaming(activeWorkspace.id);
+  }, [activeWorkspace, abortStreaming]);
+
+  const handleNewSession = useCallback(() => {
+    if (activeWorkspace && !isStreaming) clearSession(activeWorkspace.id);
+  }, [activeWorkspace, isStreaming, clearSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -136,156 +130,280 @@ export function ChatView() {
     }
   };
 
-  const handleSelectArtifact = async (filePath: string) => {
-    setSelectedArtifactPath(filePath);
-    try {
-      const content = await api.artifacts.content(filePath);
-      setArtifactContent(content);
-    } catch {
-      setArtifactContent(null);
-    }
-  };
-
-  const workspaceMessages = messages.filter(
-    (m) => m.workspaceId === activeWorkspace?.id
-  );
-
-  const isBusy = isStreaming || ccStreaming;
+  const hasContent = messages.length > 0 || currentBlocks.length > 0;
 
   return (
-    <div className="flex h-full">
-      {/* Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Goal Banner */}
-        {activeWorkspace?.goal && (
-          <div className="px-4 py-2 bg-[var(--color-bg-tertiary)] border-b border-[var(--color-border)] text-sm">
-            <span className="text-[var(--color-text-muted)]">Goal: </span>
-            <span className="text-[var(--color-text)]">{activeWorkspace.goal}</span>
+    <div className="cv-root">
+      {/* Goal banner */}
+      {activeWorkspace?.goal && (
+        <div className="cv-goal">
+          <Sparkles size={14} className="cv-goal-icon" />
+          <span className="cv-goal-label">Goal:</span>
+          <span className="cv-goal-text">{activeWorkspace.goal}</span>
+        </div>
+      )}
+
+      {/* Messages area */}
+      <div className="cv-messages" ref={containerRef}>
+        {!hasContent && <EmptyState name={activeWorkspace?.name} />}
+
+        {messages.map((msg) => (
+          <MessageItem key={msg.id} message={msg} />
+        ))}
+
+        {/* Streaming blocks */}
+        {currentBlocks.length > 0 && (
+          <div className="cv-msg cv-msg-assistant animate-fadeInUp">
+            <div className="cv-avatar cv-avatar-ai">J</div>
+            <div className="cv-bubble cv-bubble-ai">
+              <BlockList blocks={currentBlocks} streaming={isStreaming} />
+            </div>
           </div>
         )}
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {workspaceMessages.length === 0 && !ccContent && (
-            <div className="flex items-center justify-center h-full text-[var(--color-text-muted)]">
-              <div className="text-center">
-                <Globe size={48} className="mx-auto mb-4 opacity-30" />
-                <p>Start a conversation with your agent</p>
-                <p className="text-xs mt-1">Powered by Claude Code subprocess</p>
+        {/* Streaming indicator with no blocks yet */}
+        {isStreaming && currentBlocks.length === 0 && (
+          <div className="cv-msg cv-msg-assistant animate-fadeInUp">
+            <div className="cv-avatar cv-avatar-ai">J</div>
+            <div className="cv-bubble cv-bubble-ai">
+              <div className="cv-thinking-indicator">
+                <div className="cv-dot-pulse">
+                  <span /><span /><span />
+                </div>
+                <span className="cv-thinking-label">Thinking...</span>
               </div>
             </div>
-          )}
-
-          {workspaceMessages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))}
-
-          {/* Thinking Process */}
-          <ThinkingProcess thoughts={thoughts.filter(Boolean)} isThinking={isThinking} />
-
-          {/* Tool Calls */}
-          <ToolCallDisplay toolCalls={toolCalls} />
-
-          {/* CC Streaming content */}
-          {ccContent && (
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-[var(--color-primary)] flex items-center justify-center shrink-0 text-white text-xs font-bold">
-                J
-              </div>
-              <div className="flex-1 bg-[var(--color-bg-secondary)] rounded-2xl rounded-tl-sm px-4 py-3 text-sm whitespace-pre-wrap">
-                {ccContent}
-                {ccStreaming && (
-                  <span className="inline-block w-1.5 h-4 bg-[var(--color-primary)] ml-0.5 animate-pulse" />
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Legacy streaming indicator */}
-          {isStreaming && streamingContent && !ccContent && (
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-[var(--color-primary)] flex items-center justify-center shrink-0 text-white text-xs font-bold">
-                J
-              </div>
-              <div className="flex-1 bg-[var(--color-bg-secondary)] rounded-2xl rounded-tl-sm px-4 py-3 text-sm whitespace-pre-wrap">
-                {streamingContent}
-                <span className="inline-block w-1.5 h-4 bg-[var(--color-primary)] ml-0.5 animate-pulse" />
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Area */}
-        <div className="border-t border-[var(--color-border)] p-4">
-          <div className="flex items-end gap-3 max-w-4xl mx-auto">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
-              rows={1}
-              className="flex-1 resize-none px-4 py-3 rounded-xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors max-h-32"
-              style={{ minHeight: '44px' }}
-            />
-            <button
-              onClick={() => setShowArtifacts(!showArtifacts)}
-              className="p-3 rounded-xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)] transition-colors shrink-0"
-              title="Toggle artifacts panel"
-            >
-              {showArtifacts ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
-            </button>
-            <button
-              onClick={isBusy ? handleAbort : handleSend}
-              disabled={!isBusy && !input.trim()}
-              className="p-3 rounded-xl bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-            >
-              {isBusy ? <Square size={18} /> : <Send size={18} />}
-            </button>
           </div>
-        </div>
+        )}
+
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Artifacts Panel */}
-      {showArtifacts && (
-        <div className="w-80 shrink-0">
-          <ArtifactPanel
-            artifacts={artifacts}
-            selectedPath={selectedArtifactPath}
-            onSelectFile={handleSelectArtifact}
-            fileContent={artifactContent}
-            onClose={() => setShowArtifacts(false)}
+      {/* Input area */}
+      <div className="cv-input-area">
+        <div className="cv-input-wrapper">
+          {hasContent && (
+            <button
+              onClick={handleNewSession}
+              disabled={isStreaming}
+              className="cv-icon-btn"
+              title="New conversation"
+            >
+              <Plus size={16} />
+            </button>
+          )}
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isStreaming ? 'Claude is working...' : 'Message Jarvis...'}
+            rows={1}
+            disabled={isStreaming}
+            className="cv-textarea"
           />
+          <button
+            onClick={isStreaming ? handleAbort : handleSend}
+            disabled={!isStreaming && !input.trim()}
+            className={`cv-send-btn ${
+              isStreaming
+                ? 'cv-send-btn--abort'
+                : input.trim()
+                ? 'cv-send-btn--active'
+                : 'cv-send-btn--disabled'
+            }`}
+          >
+            {isStreaming ? <Square size={16} /> : <Send size={16} />}
+          </button>
+        </div>
+        <div className="cv-input-hint">
+          <kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> new line
+          &middot; YOLO mode
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MessageItem ─────────────────────────────────────────────────
+
+function MessageItem({ message }: { message: ChatMessage }) {
+  const isUser = message.role === 'user';
+
+  return (
+    <div className={`cv-msg ${isUser ? 'cv-msg-user' : 'cv-msg-assistant'}`}>
+      <div className={`cv-avatar ${isUser ? 'cv-avatar-user' : 'cv-avatar-ai'}`}>
+        {isUser ? 'U' : 'J'}
+      </div>
+      <div className={`cv-bubble ${isUser ? 'cv-bubble-user' : 'cv-bubble-ai'}`}>
+        {isUser ? (
+          <span className="whitespace-pre-wrap">{message.content}</span>
+        ) : message.blocks && message.blocks.length > 0 ? (
+          <BlockList blocks={message.blocks} streaming={false} />
+        ) : (
+          <MarkdownRenderer content={message.content} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── BlockList ───────────────────────────────────────────────────
+
+function BlockList({
+  blocks,
+  streaming,
+}: {
+  blocks: ContentBlock[];
+  streaming: boolean;
+}) {
+  return (
+    <div className="cv-blocks">
+      {blocks.map((block, idx) => {
+        const isLast = idx === blocks.length - 1;
+        switch (block.type) {
+          case 'text':
+            return (
+              <MarkdownRenderer
+                key={block.id}
+                content={block.content}
+                streaming={streaming && isLast}
+              />
+            );
+          case 'thinking':
+            return <ThinkingBlock key={block.id} block={block} active={streaming && isLast} />;
+          case 'tool_use':
+            return <ToolUseBlock key={block.id} block={block} />;
+          case 'error':
+            return <ErrorBlock key={block.id} block={block} />;
+          default:
+            return null;
+        }
+      })}
+    </div>
+  );
+}
+
+// ─── ThinkingBlock ───────────────────────────────────────────────
+
+function ThinkingBlock({ block, active }: { block: ContentBlock; active: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="cv-thinking">
+      <button onClick={() => setExpanded(!expanded)} className="cv-thinking-toggle">
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span className={`cv-thinking-dot ${active ? 'cv-thinking-dot--active' : ''}`}>
+          <Brain size={11} />
+        </span>
+        <span className="cv-thinking-label">
+          {active ? 'Thinking...' : 'Thought process'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="cv-thinking-body">
+          <pre className="cv-thinking-text">{block.content}</pre>
+          {active && <span className="md-cursor" />}
         </div>
       )}
     </div>
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
-  const isUser = message.role === 'user';
+// ─── ToolUseBlock ────────────────────────────────────────────────
+
+function ToolUseBlock({ block }: { block: ContentBlock }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const statusColor =
+    block.toolStatus === 'running'
+      ? 'var(--color-warning)'
+      : block.toolStatus === 'success'
+      ? 'var(--color-success)'
+      : 'var(--color-error)';
+
+  const statusIcon =
+    block.toolStatus === 'running' ? (
+      <Loader size={12} style={{ color: statusColor, animation: 'spin 1s linear infinite' }} />
+    ) : block.toolStatus === 'success' ? (
+      <Check size={12} style={{ color: statusColor }} />
+    ) : (
+      <X size={12} style={{ color: statusColor }} />
+    );
+
+  const label = getToolLabel(block.toolName || '', block.toolInput);
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-      <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${
-          isUser
-            ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]'
-            : 'bg-[var(--color-primary)] text-white'
-        }`}
-      >
-        {isUser ? 'U' : 'J'}
-      </div>
-      <div
-        className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap ${
-          isUser
-            ? 'bg-[var(--color-primary)] text-white rounded-tr-sm'
-            : 'bg-[var(--color-bg-secondary)] text-[var(--color-text)] rounded-tl-sm'
-        }`}
-      >
-        {message.content}
+    <div className="cv-tool" style={{ borderLeftColor: statusColor }}>
+      <button onClick={() => setExpanded(!expanded)} className="cv-tool-toggle">
+        <span className="cv-tool-chevron">
+          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        </span>
+        {statusIcon}
+        <span className="cv-tool-icon">{getToolIcon(block.toolName || '')}</span>
+        <span className="cv-tool-label">{label}</span>
+        {block.toolStatus === 'running' && (
+          <span className="cv-tool-badge">running</span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="cv-tool-body">
+          {block.toolInput && (
+            <div className="cv-tool-section">
+              <div className="cv-tool-section-title">Input</div>
+              <pre className="cv-tool-pre">
+                {JSON.stringify(block.toolInput, null, 2)}
+              </pre>
+            </div>
+          )}
+          {block.toolResult && (
+            <div className="cv-tool-section">
+              <div className="cv-tool-section-title">Result</div>
+              <pre className="cv-tool-pre cv-tool-pre--result">
+                {block.toolResult.length > 3000
+                  ? block.toolResult.slice(0, 3000) + '\n... (truncated)'
+                  : block.toolResult}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ErrorBlock ──────────────────────────────────────────────────
+
+function ErrorBlock({ block }: { block: ContentBlock }) {
+  return (
+    <div className="cv-error">
+      <AlertTriangle size={14} />
+      <span>{block.content}</span>
+    </div>
+  );
+}
+
+// ─── EmptyState ──────────────────────────────────────────────────
+
+function EmptyState({ name }: { name?: string }) {
+  return (
+    <div className="cv-empty">
+      <div className="cv-empty-inner animate-fadeIn">
+        <div className="cv-empty-avatar animate-float">
+          <Bot size={36} style={{ color: '#0a0e17' }} />
+        </div>
+        <h3 className="cv-empty-title text-gradient">{name ?? 'Jarvis'}</h3>
+        <p className="cv-empty-subtitle">
+          Start a conversation with your AI agent
+        </p>
+        <p className="cv-empty-powered">
+          Powered by Claude Code &middot; YOLO Mode
+        </p>
+        <div className="cv-empty-hint">
+          Press <kbd>Enter</kbd> to send &middot;{' '}
+          <kbd>Shift+Enter</kbd> for new line
+        </div>
       </div>
     </div>
   );

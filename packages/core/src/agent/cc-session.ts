@@ -31,16 +31,66 @@ export interface CCSessionOptions {
   maxTurns?: number;
   /** Model override (e.g. "claude-opus-4-6"). */
   model?: string;
+  /** Skip all permission prompts (YOLO mode). Defaults to true. */
+  dangerouslySkipPermissions?: boolean;
 }
 
-/** Discriminated union of every event the CC stream-json format can emit. */
-export type CCStreamEvent =
-  | { type: 'assistant'; subtype: 'text'; text: string }
-  | { type: 'assistant'; subtype: 'thinking'; text: string }
-  | { type: 'tool_use'; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; name: string; content: string }
-  | { type: 'result'; text: string; session_id: string }
-  | { type: 'error'; error: string };
+/**
+ * Content item inside an assistant message's content array.
+ */
+interface ContentItem {
+  type: string;
+  text?: string;
+  thinking?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+}
+
+/**
+ * Claude Code CLI stream-json event (loosely typed to handle all variants).
+ */
+interface CCRawEvent {
+  type: string;
+  subtype?: string;
+  // assistant events
+  message?: {
+    id?: string;
+    role?: string;
+    model?: string;
+    content?: ContentItem[] | string;
+    stop_reason?: string;
+  };
+  // tool_use (top-level)
+  id?: string;
+  tool_name?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  // tool_result
+  result?: string;
+  is_error?: boolean;
+  // result event
+  duration_ms?: number;
+  session_id?: string;
+  // error
+  error?: string;
+  // stream_event wrapper
+  event?: {
+    type: string;
+    index?: number;
+    content_block?: ContentItem;
+    delta?: { type: string; text?: string; thinking?: string };
+  };
+  // system
+  cwd?: string;
+  tools?: string[];
+  model?: string;
+  text?: string;
+  uuid?: string;
+}
+
+/** Re-export a narrower type for external consumers. */
+export type CCStreamEvent = CCRawEvent;
 
 interface CCSessionEvents {
   message: (text: string) => void;
@@ -48,6 +98,7 @@ interface CCSessionEvents {
   tool_use: (name: string, input: Record<string, unknown>) => void;
   tool_result: (name: string, content: string) => void;
   result: (text: string, sessionId: string) => void;
+  system: (info: { sessionId: string; model?: string; tools?: string[] }) => void;
   error: (error: Error) => void;
   done: (code: number | null) => void;
 }
@@ -63,11 +114,14 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
   private readonly allowedTools?: string[];
   private readonly maxTurns?: number;
   private readonly model?: string;
+  private readonly dangerouslySkipPermissions: boolean;
 
   private process: ChildProcess | null = null;
   private hasResumed = false;
   /** Buffer for incomplete NDJSON lines from stdout. */
   private stdoutBuffer = '';
+  /** Tracks whether stream_event deltas were received for current turn. */
+  private receivedStreamDeltas = false;
 
   constructor(options: CCSessionOptions) {
     super();
@@ -77,8 +131,8 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
     this.allowedTools = options.allowedTools;
     this.maxTurns = options.maxTurns;
     this.model = options.model;
+    this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? true;
 
-    // If a session ID was supplied externally we assume it already exists.
     if (options.sessionId) {
       this.hasResumed = true;
     }
@@ -88,7 +142,6 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
   // Public API
   // -----------------------------------------------------------------------
 
-  /** Return the session ID (stable across `send` calls). */
   getSessionId(): string {
     return this.sessionId;
   }
@@ -119,13 +172,12 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
 
     this.process = child;
     this.stdoutBuffer = '';
+    this.receivedStreamDeltas = false;
 
-    // -- stdout (NDJSON stream) -------------------------------------------
     child.stdout!.on('data', (chunk: Buffer) => {
       this.handleStdoutChunk(chunk);
     });
 
-    // -- stderr (informational / errors) ----------------------------------
     child.stderr!.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8').trim();
       if (text) {
@@ -133,7 +185,6 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
       }
     });
 
-    // -- process lifecycle ------------------------------------------------
     child.on('error', (err: Error) => {
       log.error('Failed to spawn claude process', { error: err.message });
       this.emit('error', err);
@@ -141,13 +192,12 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
     });
 
     child.on('close', (code: number | null, signal: string | null) => {
-      // Flush any remaining buffer content.
       this.flushBuffer();
 
       if (signal) {
-        log.info('claude process killed with signal %s', signal);
+        log.info(`claude process killed with signal ${signal}`);
       } else {
-        log.info('claude process exited with code %d', code);
+        log.info(`claude process exited with code ${code}`);
       }
 
       if (code !== 0 && code !== null) {
@@ -158,8 +208,6 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
       this.cleanup();
     });
 
-    // After the first successful send the session exists on disk, so any
-    // subsequent send should use --resume.
     this.hasResumed = true;
   }
 
@@ -171,7 +219,6 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
     log.info('Aborting claude subprocess (pid=%d)', child.pid);
     child.kill('SIGTERM');
 
-    // Forcefully kill if it hasn't exited after 5 seconds.
     const killTimer = setTimeout(() => {
       if (!child.killed) {
         log.warn('claude subprocess did not exit after SIGTERM; sending SIGKILL');
@@ -179,7 +226,6 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
       }
     }, 5_000);
 
-    // Prevent the timer from keeping the Node process alive.
     killTimer.unref();
   }
 
@@ -187,17 +233,21 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
   // Internals
   // -----------------------------------------------------------------------
 
-  /** Build the argument list for the `claude` CLI. */
   private buildArgs(message: string): string[] {
     const args: string[] = [
       '--print',
       '--output-format', 'stream-json',
       '--verbose',
-      '--session-id', this.sessionId,
     ];
 
     if (this.hasResumed) {
-      args.push('--resume');
+      args.push('--continue');
+    } else {
+      args.push('--session-id', this.sessionId);
+    }
+
+    if (this.dangerouslySkipPermissions) {
+      args.push('--dangerously-skip-permissions');
     }
 
     if (this.systemPrompt) {
@@ -216,19 +266,11 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
       args.push('--model', this.model);
     }
 
-    // The user message is the trailing positional argument.
     args.push(message);
 
     return args;
   }
 
-  /**
-   * Buffer incoming stdout data and parse complete NDJSON lines.
-   *
-   * The CC stream-json format emits one JSON object per line. Because OS
-   * pipe buffering can split a JSON line across multiple `data` events we
-   * buffer until we encounter a newline.
-   */
   private handleStdoutChunk(chunk: Buffer): void {
     this.stdoutBuffer += chunk.toString('utf-8');
 
@@ -242,7 +284,6 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
     }
   }
 
-  /** Flush any remaining data in the buffer (called on process close). */
   private flushBuffer(): void {
     const remaining = this.stdoutBuffer.trim();
     this.stdoutBuffer = '';
@@ -251,48 +292,176 @@ export class CCSession extends EventEmitter<CCSessionEvents> {
     }
   }
 
-  /** Parse a single NDJSON line and emit the corresponding event. */
+  /**
+   * Parse a single NDJSON line and emit the corresponding event.
+   *
+   * Claude Code CLI stream-json format (v2.x):
+   *
+   * - system:    {"type":"system","subtype":"init","session_id":"...","tools":[...]}
+   * - assistant: {"type":"assistant","message":{"content":[{type:"text",text:"..."},{type:"thinking",thinking:"..."}]}}
+   * - tool_use:  {"type":"tool_use","tool_name":"Read","input":{...}}
+   * - tool_result: {"type":"tool_result","result":"...","is_error":false}
+   * - stream_event: {"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}}
+   * - result:    {"type":"result","subtype":"success","result":"...","session_id":"..."}
+   * - error:     {"type":"error","error":"..."}
+   */
   private parseLine(line: string): void {
-    let event: CCStreamEvent;
+    let event: CCRawEvent;
     try {
-      event = JSON.parse(line) as CCStreamEvent;
+      event = JSON.parse(line);
     } catch {
-      log.warn('Failed to parse NDJSON line: %s', line);
+      log.warn('Failed to parse NDJSON line: %s', line.substring(0, 200));
       return;
     }
 
     switch (event.type) {
+      case 'system':
+        this.handleSystemEvent(event);
+        break;
+
       case 'assistant':
-        if (event.subtype === 'thinking') {
-          this.emit('thinking', event.text);
-        } else {
-          this.emit('message', event.text);
-        }
+        this.handleAssistantEvent(event);
         break;
 
       case 'tool_use':
-        this.emit('tool_use', event.name, event.input);
+        this.handleToolUseEvent(event);
         break;
 
       case 'tool_result':
-        this.emit('tool_result', event.name, event.content);
+        this.handleToolResultEvent(event);
+        break;
+
+      case 'stream_event':
+        this.handleStreamEvent(event);
         break;
 
       case 'result':
-        this.emit('result', event.text, event.session_id);
+        this.handleResultEvent(event);
         break;
 
       case 'error':
-        this.emit('error', new Error(event.error));
+        this.emit('error', new Error(event.error ?? 'Unknown CC error'));
         break;
 
       default:
-        log.debug('Unhandled CC stream event type: %s', (event as any).type);
+        log.debug('Unhandled CC stream event type: %s', event.type);
         break;
     }
   }
 
-  /** Reset internal process state after exit. */
+  private handleSystemEvent(event: CCRawEvent): void {
+    if (event.subtype === 'init') {
+      this.emit('system', {
+        sessionId: event.session_id ?? this.sessionId,
+        model: event.model ?? undefined,
+        tools: event.tools,
+      });
+    }
+  }
+
+  /**
+   * Handle assistant events which contain a `message` object with a
+   * `content` array of typed items: text, thinking, tool_use, etc.
+   *
+   * If we already received incremental stream_event deltas for text/thinking,
+   * skip emitting from the assistant event to avoid duplication.
+   */
+  private handleAssistantEvent(event: CCRawEvent): void {
+    const msg = event.message;
+    if (!msg) return;
+
+    const content = msg.content;
+    if (!content) return;
+
+    if (typeof content === 'string') {
+      if (!this.receivedStreamDeltas) {
+        this.emit('message', content);
+      }
+      return;
+    }
+
+    if (!Array.isArray(content)) return;
+
+    for (const item of content) {
+      switch (item.type) {
+        case 'text':
+          if (item.text && !this.receivedStreamDeltas) {
+            this.emit('message', item.text);
+          }
+          break;
+
+        case 'thinking':
+          if (item.thinking && !this.receivedStreamDeltas) {
+            this.emit('thinking', item.thinking);
+          }
+          break;
+
+        case 'tool_use':
+          if (item.name) {
+            this.emit('tool_use', item.name, item.input ?? {});
+          }
+          break;
+
+        default:
+          break;
+      }
+    }
+  }
+
+  /**
+   * Top-level tool_use event (outside of assistant message content).
+   * Uses `tool_name` field (not `name`).
+   */
+  private handleToolUseEvent(event: CCRawEvent): void {
+    const toolName = event.tool_name ?? event.name ?? 'unknown';
+    this.emit('tool_use', toolName, event.input ?? {});
+  }
+
+  /**
+   * Tool result event. Uses `result` field (not `content`).
+   */
+  private handleToolResultEvent(event: CCRawEvent): void {
+    const resultText = typeof event.result === 'string' ? event.result : JSON.stringify(event.result ?? '');
+    const toolName = event.name ?? event.tool_name ?? 'unknown';
+    this.emit('tool_result', toolName, resultText);
+  }
+
+  /**
+   * Stream event wrapper - contains incremental content block deltas
+   * for real-time text/thinking streaming.
+   */
+  private handleStreamEvent(event: CCRawEvent): void {
+    const inner = event.event;
+    if (!inner) return;
+
+    switch (inner.type) {
+      case 'content_block_delta': {
+        const delta = inner.delta;
+        if (!delta) break;
+
+        this.receivedStreamDeltas = true;
+
+        if (delta.type === 'text_delta' && delta.text) {
+          this.emit('message', delta.text);
+        } else if (delta.type === 'thinking_delta' && delta.thinking) {
+          this.emit('thinking', delta.thinking);
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Final result event. Uses `result` field for text, `session_id` for session.
+   */
+  private handleResultEvent(event: CCRawEvent): void {
+    const text = typeof event.result === 'string' ? event.result : '';
+    this.emit('result', text, event.session_id ?? this.sessionId);
+  }
+
   private cleanup(): void {
     this.process = null;
     this.stdoutBuffer = '';

@@ -152,32 +152,51 @@ function createBuiltinTools(): ToolDefinition[] {
   // ---- image_generate ----
   tools.push({
     name: 'image_generate',
-    description: 'Generate an image from a text prompt (placeholder – requires external API integration).',
+    description: 'Generate an image from a text prompt using the configured model provider.',
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Text description of the image to generate' },
         size: { type: 'string', description: 'Image size (e.g. 1024x1024)', default: '1024x1024' },
+        model: { type: 'string', description: 'Model to use (e.g. dall-e-3, gpt-image-1)' },
         outputPath: { type: 'string', description: 'Path to save the generated image' },
       },
       required: ['prompt'],
     },
     execute: async (params) => {
-      // Placeholder – actual implementation depends on model provider
-      logger.warn('image_generate tool is a placeholder; integrate an image model provider');
-      return {
-        prompt: params.prompt,
-        size: params.size ?? '1024x1024',
-        status: 'not_implemented',
-        message: 'Image generation requires an external API (e.g., DALL-E, Stable Diffusion).',
-      };
+      const { ProviderRegistry } = await import('../models/index.js');
+      const registry = new ProviderRegistry();
+      const providers = registry.listProviders();
+      const provider = providers.find(p => p.apiKey && p.baseUrl);
+
+      if (!provider) {
+        return { status: 'error', message: 'No provider configured with API key. Configure a provider first.' };
+      }
+
+      const { ModelService } = await import('../models/index.js');
+      const service = new ModelService({ baseUrl: provider.baseUrl, apiKey: provider.apiKey });
+      const result = await service.generateImage(params.prompt as string, {
+        model: params.model as string | undefined,
+        size: (params.size as "1024x1024" | "256x256" | "512x512" | "1792x1024" | "1024x1792") || '1024x1024',
+        responseFormat: params.outputPath ? 'b64_json' : 'url',
+      });
+
+      if (params.outputPath && result.data?.[0]?.b64_json) {
+        const buffer = Buffer.from(result.data[0].b64_json, 'base64');
+        const dir = path.dirname(params.outputPath as string);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(params.outputPath as string, buffer);
+        return { status: 'success', path: params.outputPath, prompt: params.prompt };
+      }
+
+      return { status: 'success', images: result.data, prompt: params.prompt };
     },
   });
 
   // ---- search ----
   tools.push({
     name: 'search',
-    description: 'Search the web for information (placeholder – requires search API integration).',
+    description: 'Search the web using DuckDuckGo HTML and extract results.',
     parameters: {
       type: 'object',
       properties: {
@@ -187,13 +206,43 @@ function createBuiltinTools(): ToolDefinition[] {
       required: ['query'],
     },
     execute: async (params) => {
-      logger.warn('search tool is a placeholder; integrate a search API provider');
-      return {
-        query: params.query,
-        status: 'not_implemented',
-        message: 'Search requires an external API (e.g., SerpAPI, Tavily, Brave Search).',
-        results: [],
-      };
+      const query = params.query as string;
+      const maxResults = parseInt(params.maxResults as string, 10) || 5;
+
+      try {
+        const encoded = encodeURIComponent(query);
+        const url = `https://html.duckduckgo.com/html/?q=${encoded}`;
+        const resp = await fetch(url, {
+          headers: {
+            'User-Agent': 'Jarvis/1.0 (Search Tool)',
+            'Accept': 'text/html',
+          },
+          signal: AbortSignal.timeout(15_000),
+        });
+        const html = await resp.text();
+
+        const results: { title: string; url: string; snippet: string }[] = [];
+        const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+        let match: RegExpExecArray | null;
+
+        while ((match = resultRegex.exec(html)) !== null && results.length < maxResults) {
+          const rawUrl = match[1];
+          const title = match[2].replace(/<[^>]*>/g, '').trim();
+          const snippet = match[3].replace(/<[^>]*>/g, '').trim();
+          const decodedUrl = decodeURIComponent(
+            rawUrl.replace(/.*uddg=([^&]*).*/, '$1') || rawUrl
+          );
+          if (title && decodedUrl) {
+            results.push({ title, url: decodedUrl, snippet });
+          }
+        }
+
+        return { query, status: 'success', results };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        logger.error(`[search] Failed: ${error}`);
+        return { query, status: 'error', error, results: [] };
+      }
     },
   });
 
@@ -305,7 +354,7 @@ export class ToolManager {
    * Each .js file should export a ToolDefinition as default.
    */
   loadWorkspaceTools(workspaceId: UUID): void {
-    const toolsDir = path.join(os.homedir(), '.jarvis', 'workspaces', workspaceId, 'tools');
+    const toolsDir = path.join(os.homedir(), '.jarvis', 'data', 'workspaces', workspaceId, 'tools');
 
     if (!fs.existsSync(toolsDir)) {
       this.workspaceToolsLoaded.add(workspaceId);
@@ -337,7 +386,7 @@ export class ToolManager {
    * workspace tools/ directory.
    */
   async createTool(workspaceId: UUID, spec: CreateToolSpec): Promise<string> {
-    const toolsDir = path.join(os.homedir(), '.jarvis', 'workspaces', workspaceId, 'tools');
+    const toolsDir = path.join(os.homedir(), '.jarvis', 'data', 'workspaces', workspaceId, 'tools');
     fs.mkdirSync(toolsDir, { recursive: true });
 
     const filePath = path.join(toolsDir, `${spec.name}.ts`);

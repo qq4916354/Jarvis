@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, Terminal, Check, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Terminal, Check, X, Loader } from 'lucide-react';
 
 export interface ToolCallInfo {
   id: string;
@@ -17,7 +17,7 @@ export function ToolCallDisplay({ toolCalls }: ToolCallDisplayProps) {
   if (toolCalls.length === 0) return null;
 
   return (
-    <div className="space-y-1 mx-4 mb-2">
+    <div className="space-y-1.5 mx-1 mb-2">
       {toolCalls.map((tc) => (
         <ToolCallItem key={tc.id} toolCall={tc} />
       ))}
@@ -28,37 +28,115 @@ export function ToolCallDisplay({ toolCalls }: ToolCallDisplayProps) {
 function ToolCallItem({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
 
-  const statusIcon = toolCall.status === 'running'
-    ? <Terminal size={12} className="animate-pulse text-yellow-500" />
-    : toolCall.status === 'success'
-    ? <Check size={12} className="text-green-500" />
-    : <X size={12} className="text-red-500" />;
+  const statusColor =
+    toolCall.status === 'running'
+      ? '#f59e0b'
+      : toolCall.status === 'success'
+      ? '#10b981'
+      : '#ef4444';
+
+  const statusIcon =
+    toolCall.status === 'running' ? (
+      <Loader size={11} style={{ color: statusColor, animation: 'spin 1s linear infinite' }} />
+    ) : toolCall.status === 'success' ? (
+      <Check size={11} style={{ color: statusColor }} />
+    ) : (
+      <X size={11} style={{ color: statusColor }} />
+    );
 
   return (
-    <div className="rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] text-xs overflow-hidden">
+    <div
+      className="rounded-xl overflow-hidden text-xs"
+      style={{
+        background: 'var(--color-bg-secondary)',
+        border: '1px solid var(--color-border)',
+        borderLeft: `3px solid ${statusColor}`,
+        transition: 'border-color var(--transition-base)',
+      }}
+    >
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-bg-secondary)] transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 transition-colors"
+        style={{ background: 'transparent' }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-bg-tertiary)';
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+        }}
       >
-        {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        <span style={{ color: 'var(--color-text-muted)', flexShrink: 0 }}>
+          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        </span>
         {statusIcon}
-        <span className="font-mono font-medium text-[var(--color-text)]">{toolCall.name}</span>
-        <span className="text-[var(--color-text-muted)] truncate flex-1 text-left">
-          {JSON.stringify(toolCall.input).slice(0, 80)}
+        <Terminal size={11} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+        <span
+          className="font-medium"
+          style={{ color: 'var(--color-text)', fontFamily: 'JetBrains Mono, monospace' }}
+        >
+          {toolCall.name}
+        </span>
+        {toolCall.status === 'running' && (
+          <span
+            className="ml-1 px-1.5 py-0.5 rounded text-xs animate-shimmer"
+            style={{
+              background: 'rgba(245,158,11,0.15)',
+              color: '#f59e0b',
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            running
+          </span>
+        )}
+        <span
+          className="truncate flex-1 text-left"
+          style={{ color: 'var(--color-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}
+        >
+          {JSON.stringify(toolCall.input).slice(0, 60)}
         </span>
       </button>
+
       {expanded && (
-        <div className="px-3 py-2 border-t border-[var(--color-border)] space-y-2">
+        <div
+          className="px-3 py-2.5 space-y-2.5"
+          style={{ borderTop: '1px solid var(--color-border)' }}
+        >
           <div>
-            <span className="text-[var(--color-text-muted)]">Input:</span>
-            <pre className="mt-0.5 p-2 rounded bg-[var(--color-bg)] text-[var(--color-text)] overflow-x-auto">
+            <div
+              className="text-xs mb-1.5 font-medium"
+              style={{ color: 'var(--color-text-muted)' }}
+            >
+              Input
+            </div>
+            <pre
+              className="p-3 rounded-lg text-xs overflow-x-auto leading-relaxed"
+              style={{
+                background: 'var(--color-bg)',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text)',
+                fontFamily: 'JetBrains Mono, monospace',
+              }}
+            >
               {JSON.stringify(toolCall.input, null, 2)}
             </pre>
           </div>
           {toolCall.result && (
             <div>
-              <span className="text-[var(--color-text-muted)]">Result:</span>
-              <pre className="mt-0.5 p-2 rounded bg-[var(--color-bg)] text-[var(--color-text)] overflow-x-auto max-h-48">
+              <div
+                className="text-xs mb-1.5 font-medium"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Result
+              </div>
+              <pre
+                className="p-3 rounded-lg text-xs overflow-x-auto max-h-48 leading-relaxed"
+                style={{
+                  background: 'var(--color-bg)',
+                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-text)',
+                  fontFamily: 'JetBrains Mono, monospace',
+                }}
+              >
                 {toolCall.result.slice(0, 2000)}
               </pre>
             </div>

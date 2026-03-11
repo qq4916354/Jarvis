@@ -7,8 +7,9 @@
 
 // ─── Configuration ───────────────────────────────────────────────
 
-const API_BASE = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:3927`;
-const WS_URL = (import.meta as any).env?.VITE_WS_URL || `ws://${window.location.hostname}:3927`;
+const API_BASE = (import.meta as any).env?.VITE_API_URL || '';
+const WS_URL = (import.meta as any).env?.VITE_WS_URL ||
+  `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
 // ─── HTTP helpers ────────────────────────────────────────────────
 
@@ -240,11 +241,72 @@ export const api = {
       post<string | null>('/api/artifacts/content', { filePath }, null),
   },
 
+  dashboard: {
+    get: () => get<any>('/api/dashboard', null),
+  },
+
+  ws: {
+    on: (type: string, callback: EventCallback) => wsManager.on(type, callback),
+  },
+
   browser: {
-    open: (_url?: string) => Promise.resolve(null),
-    navigate: (_url: string) => Promise.resolve(null),
-    state: () => Promise.resolve(null),
-    screenshot: () => Promise.resolve(null),
-    close: () => Promise.resolve(undefined),
+    launch: () => post<any>('/api/browser/launch', {}, null),
+    close: () => post<void>('/api/browser/close', {}, undefined),
+    navigate: (url: string) => post<any>('/api/browser/navigate', { url }, null),
+    back: () => post<any>('/api/browser/back', {}, null),
+    forward: () => post<any>('/api/browser/forward', {}, null),
+    reload: () => post<any>('/api/browser/reload', {}, null),
+    snapshot: () => post<any>('/api/browser/snapshot', {}, null),
+    screenshot: () => post<any>('/api/browser/screenshot', {}, null),
+    click: (uid: string, dblClick?: boolean) => post<any>('/api/browser/click', { uid, dblClick }, null),
+    hover: (uid: string) => post<any>('/api/browser/hover', { uid }, null),
+    fill: (uid: string, value: string) => post<any>('/api/browser/fill', { uid, value }, null),
+    select: (uid: string, values: string[]) => post<any>('/api/browser/select', { uid, values }, null),
+    type: (text: string, delay?: number) => post<any>('/api/browser/type', { text, delay }, null),
+    press: (key: string) => post<any>('/api/browser/press', { key }, null),
+    evaluate: (expression: string) => post<any>('/api/browser/evaluate', { expression }, null),
+    wait: (opts: { selector?: string; text?: string; timeout?: number }) => post<any>('/api/browser/wait', opts, null),
+    state: () => get<any>('/api/browser/state', null),
+    pages: () => get<any[]>('/api/browser/pages', []),
+    newPage: (url?: string) => post<any>('/api/browser/new-page', { url }, null),
+    closePage: (index?: number) => post<void>('/api/browser/close-page', { index }, undefined),
+    selectPage: (index: number) => post<any>('/api/browser/select-page', { index }, null),
+    onNavigated: (cb: (data: any) => void) => wsManager.on('browser:navigated', cb),
+    onConsole: (cb: (data: any) => void) => wsManager.on('browser:console', cb),
+    onError: (cb: (data: any) => void) => wsManager.on('browser:error', cb),
+  },
+
+  workspaceFiles: {
+    read: (workspaceId: string, fileName: string) =>
+      post<string | null>('/api/workspace-files/read', { workspaceId, fileName }, null),
+    write: (workspaceId: string, fileName: string, content: string) =>
+      post<void>('/api/workspace-files/write', { workspaceId, fileName, content }, undefined),
+  },
+
+  daemon: {
+    status: () => get<any>('/api/daemon/status', null),
+    logs: (limit?: number) => get<any[]>(`/api/daemon/logs?limit=${limit || 50}`, []),
+    restart: () => post<void>('/api/daemon/restart', {}, undefined),
+  },
+
+  scheduler: {
+    list: (workspaceId: string) =>
+      get<any[]>(`/api/scheduler?workspaceId=${workspaceId}`, []),
+    create: (workspaceId: string, task: { name: string; cron: string; action: string }) =>
+      post<any>('/api/scheduler', { workspaceId, ...task }, null),
+    update: (taskId: string, updates: any) =>
+      put<any>(`/api/scheduler/${taskId}`, updates, null),
+    delete: (taskId: string) =>
+      del<boolean>(`/api/scheduler/${taskId}`, false),
+  },
+
+  evolution: {
+    start: (goal?: string, projectPath?: string) =>
+      post<any>('/api/evolution/start', { goal, projectPath }, null),
+    history: () => get<any[]>('/api/evolution/history', []),
+    onLog: (cb: (data: any) => void) => wsManager.on('evolution:log', cb),
+    onPhase: (cb: (data: any) => void) => wsManager.on('evolution:phase', cb),
+    onComplete: (cb: (data: any) => void) => wsManager.on('evolution:complete', cb),
+    onError: (cb: (data: any) => void) => wsManager.on('evolution:error', cb),
   },
 };

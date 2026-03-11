@@ -40,8 +40,8 @@ interface DaemonConfig {
 }
 
 const DEFAULT_CONFIG: DaemonConfig = {
-  desktopCommand: 'electron',
-  desktopArgs: [join(__dirname, '../../desktop/dist/main/index.js')],
+  desktopCommand: 'node',
+  desktopArgs: [join(__dirname, '../../desktop/dist/server/index.js')],
   maxRestartAttempts: 5,
   restartDelayMs: 3000,
   healthCheckIntervalMs: 30000,
@@ -370,11 +370,14 @@ Only modify files that are directly related to the error.`;
     }
   }
 
-  private performHealthCheck() {
+  private async performHealthCheck() {
+    const isHttpAlive = await this.checkHttpHealth();
+
     const status = {
       daemonPid: process.pid,
       desktopPid: this.desktopProcess?.pid ?? null,
       desktopRunning: this.desktopProcess !== null,
+      httpAlive: isHttpAlive,
       restartCount: this.restartCount,
       recentErrorCount: this.recentErrors.length,
       uptime: process.uptime(),
@@ -382,13 +385,29 @@ Only modify files that are directly related to the error.`;
       timestamp: new Date().toISOString(),
     };
 
-    // Write status to a file for external monitoring
     const statusPath = join(JARVIS_HOME, 'status.json');
     writeFileSync(statusPath, JSON.stringify(status, null, 2));
 
     if (!status.desktopRunning && !this.isShuttingDown) {
       logger.warn('Health check: Desktop not running, attempting restart');
       this.restartDesktop();
+    } else if (status.desktopRunning && !isHttpAlive && !this.isShuttingDown) {
+      logger.warn('Health check: Process alive but HTTP unresponsive, scheduling restart');
+      this.handleDesktopExit(1, null);
+    }
+  }
+
+  private async checkHttpHealth(): Promise<boolean> {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`http://127.0.0.1:${this.config.webServerPort}/api/system/status`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      return res.ok;
+    } catch {
+      return false;
     }
   }
 

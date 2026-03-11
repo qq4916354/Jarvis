@@ -421,6 +421,120 @@ export class UpgradeEngine {
   }
 
   // -----------------------------------------------------------------------
+  // safeUpgrade – develop with git backup, tsc check, and auto-rollback
+  // -----------------------------------------------------------------------
+
+  /**
+   * A safer wrapper around developFeature that:
+   * 1. Creates a git stash backup before making changes
+   * 2. Runs `tsc --noEmit` after development to validate types
+   * 3. Automatically rolls back via git stash pop if tsc fails
+   */
+  async safeUpgrade(
+    description: string,
+    options?: { workspacePath?: string; tsconfigPath?: string },
+  ): Promise<UpgradeResult> {
+    const cwd = options?.workspacePath ?? process.cwd();
+    const requestId = uuid();
+
+    // Step 1: Create git stash backup
+    const stashResult = await this.runCommand('git', ['stash', 'push', '-m', `jarvis-safe-upgrade-${requestId}`], cwd);
+    const stashCreated = !stashResult.stdout.includes('No local changes');
+    if (stashCreated) {
+      this.logActivity('safeUpgrade:stash', description, 'success', 'Created git stash backup');
+    }
+
+    // Step 2: Develop the feature
+    const devResult = await this.developFeature(description, cwd);
+
+    if (!devResult.success) {
+      // Restore stash if development failed
+      if (stashCreated) {
+        await this.runCommand('git', ['stash', 'pop'], cwd);
+        this.logActivity('safeUpgrade:rollback', description, 'success', 'Rolled back via git stash pop (dev failed)');
+      }
+      return {
+        ...devResult,
+        requestId,
+        rollbackAvailable: false,
+      };
+    }
+
+    // Step 3: Run tsc to validate
+    const tscArgs = ['--noEmit'];
+    if (options?.tsconfigPath) {
+      tscArgs.push('-p', options.tsconfigPath);
+    }
+    const tscResult = await this.runCommand('npx', ['tsc', ...tscArgs], cwd);
+
+    if (tscResult.exitCode !== 0) {
+      this.logActivity('safeUpgrade:tsc', description, 'failure', tscResult.stdout, tscResult.stderr);
+
+      // Step 4: Rollback – discard changes and restore stash
+      await this.runCommand('git', ['checkout', '.'], cwd);
+      // Clean any new untracked files from the development
+      await this.runCommand('git', ['clean', '-fd'], cwd);
+      if (stashCreated) {
+        await this.runCommand('git', ['stash', 'pop'], cwd);
+      }
+      this.logActivity('safeUpgrade:rollback', description, 'success', 'Rolled back due to tsc failure');
+
+      return {
+        requestId,
+        success: false,
+        scope: 'code',
+        error: `TypeScript check failed:\n${tscResult.stderr || tscResult.stdout}`,
+        rollbackAvailable: false,
+        completedAt: new Date().toISOString(),
+      };
+    }
+
+    this.logActivity('safeUpgrade:tsc', description, 'success', 'TypeScript check passed');
+
+    // Drop the stash since the upgrade succeeded
+    if (stashCreated) {
+      await this.runCommand('git', ['stash', 'drop'], cwd);
+    }
+
+    return {
+      requestId,
+      success: true,
+      scope: 'code',
+      appliedChanges: devResult.appliedChanges,
+      rollbackAvailable: true,
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Helper to run a shell command and capture output.
+   */
+  private runCommand(cmd: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return new Promise((resolve) => {
+      const proc = spawn(cmd, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+        shell: true,
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+      proc.on('close', (code) => {
+        resolve({ stdout, stderr, exitCode: code ?? 1 });
+      });
+
+      proc.on('error', (err) => {
+        resolve({ stdout, stderr: err.message, exitCode: 1 });
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // CC Skill management
   // -----------------------------------------------------------------------
 

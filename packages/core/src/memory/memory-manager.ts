@@ -23,6 +23,10 @@ import type {
   Memory,
   MemoryType,
   Episode,
+  SemanticSearchOptions,
+  SemanticSearchResult,
+  MemoryImportance,
+  ConsolidationResult,
 } from '../types/index.js';
 import logger from '../utils/logger.js';
 import eventBus from '../utils/event-bus.js';
@@ -79,6 +83,25 @@ const SCHEMA_SQL = `
 
   CREATE INDEX IF NOT EXISTS idx_episodes_workspace_ts
     ON episodes (workspace_id, timestamp DESC);
+
+  CREATE TABLE IF NOT EXISTS embeddings (
+    memory_id     TEXT PRIMARY KEY,
+    workspace_id  TEXT NOT NULL,
+    vector        TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_embeddings_workspace
+    ON embeddings (workspace_id);
+`;
+
+/**
+ * Migration SQL to add the importance column to the memories table.
+ * Uses a safe ALTER TABLE that is ignored if the column already exists.
+ */
+const MIGRATION_IMPORTANCE_COLUMN = `
+  ALTER TABLE memories ADD COLUMN importance REAL DEFAULT NULL;
 `;
 
 // ----------------------------------------------------------------------------
@@ -215,6 +238,9 @@ export class MemoryManager {
     logger.debug('Memory stored', { workspaceId, key, type });
     eventBus.emitEvent('memory:remembered', { workspaceId, memory });
 
+    // Best-effort: generate and store embedding in the background
+    this.storeEmbedding(workspaceId, id, `${key}: ${value}`).catch(() => {});
+
     return memory;
   }
 
@@ -313,6 +339,350 @@ export class MemoryManager {
 
     const rows = db.prepare(sql).all(...params) as RawEpisodeRow[];
     return rows.map(this.rowToEpisode);
+  }
+
+  // --------------------------------------------------------------------------
+  // Semantic Search
+  // --------------------------------------------------------------------------
+
+  /**
+   * Perform a semantic search over memories using embedding vectors.
+   * Falls back to LIKE-based search if the embedding API is unavailable.
+   *
+   * @param workspaceId  Target workspace
+   * @param query        Natural-language search query
+   * @param options      Optional search parameters
+   */
+  async semanticSearch(
+    workspaceId: Id,
+    query: string,
+    options?: SemanticSearchOptions,
+  ): Promise<SemanticSearchResult[]> {
+    const limit = options?.limit ?? 10;
+    const threshold = options?.threshold ?? 0.5;
+
+    // Try to get an embedding for the query
+    let queryVector: number[] | null = null;
+    try {
+      queryVector = await this.getEmbedding(query);
+    } catch (err) {
+      logger.warn('Embedding API unavailable, falling back to LIKE search', { error: err });
+    }
+
+    // Fallback: use the existing LIKE-based recall
+    if (!queryVector) {
+      const memories = await this.recall(workspaceId, query, options?.type);
+      return memories.slice(0, limit).map((memory) => ({ memory, score: 1.0 }));
+    }
+
+    // Load all embeddings for this workspace and compute cosine similarity
+    const db = this.getDatabase(workspaceId);
+
+    let memorySql = `
+      SELECT m.id, m.workspace_id, m.key, m.value, m.type, m.timestamp, m.metadata, m.importance,
+             e.vector
+      FROM memories m
+      INNER JOIN embeddings e ON e.memory_id = m.id
+      WHERE m.workspace_id = ?
+    `;
+    const params: unknown[] = [workspaceId];
+
+    if (options?.type !== undefined) {
+      memorySql += ` AND m.type = ?`;
+      params.push(options.type);
+    }
+
+    const rows = db.prepare(memorySql).all(...params) as (RawMemoryRow & { vector: string; importance: number | null })[];
+
+    const scored: SemanticSearchResult[] = [];
+    for (const row of rows) {
+      let storedVector: number[];
+      try {
+        storedVector = JSON.parse(row.vector);
+      } catch {
+        continue;
+      }
+      const score = cosineSimilarity(queryVector, storedVector);
+      if (score >= threshold) {
+        scored.push({ memory: this.rowToMemory(row), score });
+      }
+    }
+
+    // Sort by score descending, limit results
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit);
+  }
+
+  // --------------------------------------------------------------------------
+  // Importance Scoring
+  // --------------------------------------------------------------------------
+
+  /**
+   * Compute and persist an importance score for a memory entry.
+   * Uses a simple heuristic based on content length, recency, and metadata.
+   */
+  async scoreImportance(memory: Memory): Promise<MemoryImportance> {
+    let score = 0.5;
+    const reasons: string[] = [];
+
+    // Factor 1: Content length (longer = potentially more important, up to a point)
+    const contentLength = memory.value.length;
+    if (contentLength > 200) {
+      score += 0.1;
+      reasons.push('detailed content');
+    } else if (contentLength < 20) {
+      score -= 0.1;
+      reasons.push('very short content');
+    }
+
+    // Factor 2: Recency (memories from the last 24h get a boost)
+    const ageMs = Date.now() - memory.timestamp;
+    const oneDay = 24 * 60 * 60 * 1000;
+    if (ageMs < oneDay) {
+      score += 0.15;
+      reasons.push('recent memory');
+    } else if (ageMs > 30 * oneDay) {
+      score -= 0.1;
+      reasons.push('older than 30 days');
+    }
+
+    // Factor 3: Memory type (long-term tends to be more curated)
+    if (memory.type === ('long_term' as MemoryType)) {
+      score += 0.1;
+      reasons.push('long-term memory');
+    }
+
+    // Factor 4: Has metadata (structured data suggests intentional storage)
+    if (memory.metadata && Object.keys(memory.metadata).length > 0) {
+      score += 0.05;
+      reasons.push('has metadata');
+    }
+
+    // Clamp to [0, 1]
+    score = Math.max(0, Math.min(1, score));
+
+    // Persist the score
+    const db = this.getDatabase(memory.workspaceId);
+    db.prepare(`UPDATE memories SET importance = ? WHERE id = ?`).run(score, memory.id);
+
+    const result: MemoryImportance = {
+      memoryId: memory.id,
+      score,
+      reason: reasons.join('; ') || 'default scoring',
+    };
+
+    logger.debug('Importance scored', { memoryId: memory.id, score });
+    return result;
+  }
+
+  // --------------------------------------------------------------------------
+  // Auto-Summarize (Extract facts from conversation)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Extract key facts and preferences from a list of conversation messages
+   * and automatically store them as long-term memories.
+   *
+   * Uses a simple keyword/pattern extraction approach that works without
+   * an external LLM call.  For richer extraction, callers can pre-process
+   * messages through the ModelService before invoking this method.
+   */
+  async autoSummarize(
+    workspaceId: Id,
+    messages: Array<{ role: string; content: string }>,
+  ): Promise<Memory[]> {
+    const extracted: Array<{ key: string; value: string }> = [];
+
+    // Patterns that often indicate facts / preferences
+    const factPatterns: Array<{ regex: RegExp; keyPrefix: string }> = [
+      { regex: /(?:my name is|I'm called|call me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/gi, keyPrefix: 'user_name' },
+      { regex: /(?:I (?:like|love|prefer|enjoy))\s+(.{3,60}?)(?:\.|,|!|$)/gi, keyPrefix: 'preference' },
+      { regex: /(?:I (?:dislike|hate|don't like|avoid))\s+(.{3,60}?)(?:\.|,|!|$)/gi, keyPrefix: 'dislike' },
+      { regex: /(?:I (?:work|am working) (?:at|for|with))\s+(.{3,60}?)(?:\.|,|!|$)/gi, keyPrefix: 'workplace' },
+      { regex: /(?:I (?:live|am living|stay) (?:in|at))\s+(.{3,60}?)(?:\.|,|!|$)/gi, keyPrefix: 'location' },
+      { regex: /(?:remember that|note that|important:)\s+(.{3,120}?)(?:\.|!|$)/gi, keyPrefix: 'noted_fact' },
+    ];
+
+    for (const msg of messages) {
+      if (msg.role !== 'user') continue;
+      for (const pattern of factPatterns) {
+        let match: RegExpExecArray | null;
+        // Reset lastIndex for global regex
+        pattern.regex.lastIndex = 0;
+        while ((match = pattern.regex.exec(msg.content)) !== null) {
+          const value = match[1].trim();
+          if (value.length >= 3) {
+            extracted.push({
+              key: `${pattern.keyPrefix}_${extracted.length}`,
+              value,
+            });
+          }
+        }
+      }
+    }
+
+    // Store extracted facts as long-term memories
+    const stored: Memory[] = [];
+    for (const fact of extracted) {
+      const memory = await this.remember(
+        workspaceId,
+        fact.key,
+        fact.value,
+        'long_term' as MemoryType,
+        { source: 'auto_summarize', extractedAt: Date.now() },
+      );
+      stored.push(memory);
+    }
+
+    if (stored.length > 0) {
+      logger.info('Auto-summarize extracted facts', { workspaceId, count: stored.length });
+    }
+
+    return stored;
+  }
+
+  // --------------------------------------------------------------------------
+  // Memory Consolidation
+  // --------------------------------------------------------------------------
+
+  /**
+   * Consolidate memories for a workspace by:
+   * 1. Merging near-duplicate memories (same key or very similar values)
+   * 2. Removing low-importance memories older than 30 days
+   */
+  async consolidate(workspaceId: Id): Promise<ConsolidationResult> {
+    const db = this.getDatabase(workspaceId);
+    let merged = 0;
+    let removed = 0;
+
+    // Step 1: Merge memories with duplicate keys (keep the most recent)
+    const dupeRows = db.prepare(`
+      SELECT key, type, COUNT(*) as cnt
+      FROM memories
+      WHERE workspace_id = ?
+      GROUP BY key, type
+      HAVING cnt > 1
+    `).all(workspaceId) as Array<{ key: string; type: string; cnt: number }>;
+
+    for (const dupe of dupeRows) {
+      // Keep the newest entry, delete the rest
+      const entries = db.prepare(`
+        SELECT id FROM memories
+        WHERE workspace_id = ? AND key = ? AND type = ?
+        ORDER BY timestamp DESC
+      `).all(workspaceId, dupe.key, dupe.type) as Array<{ id: string }>;
+
+      for (let i = 1; i < entries.length; i++) {
+        db.prepare(`DELETE FROM memories WHERE id = ?`).run(entries[i].id);
+        db.prepare(`DELETE FROM embeddings WHERE memory_id = ?`).run(entries[i].id);
+        merged++;
+      }
+    }
+
+    // Step 2: Remove low-importance old memories
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const lowValueResult = db.prepare(`
+      DELETE FROM memories
+      WHERE workspace_id = ?
+        AND importance IS NOT NULL
+        AND importance < 0.3
+        AND timestamp < ?
+    `).run(workspaceId, thirtyDaysAgo);
+    removed = lowValueResult.changes;
+
+    // Clean up orphaned embeddings
+    db.prepare(`
+      DELETE FROM embeddings
+      WHERE workspace_id = ?
+        AND memory_id NOT IN (SELECT id FROM memories WHERE workspace_id = ?)
+    `).run(workspaceId, workspaceId);
+
+    // Count remaining
+    const remainingRow = db.prepare(
+      `SELECT COUNT(*) as cnt FROM memories WHERE workspace_id = ?`,
+    ).get(workspaceId) as { cnt: number };
+
+    const result: ConsolidationResult = {
+      merged,
+      removed,
+      remaining: remainingRow.cnt,
+    };
+
+    logger.info('Memory consolidation complete', { workspaceId, ...result });
+    eventBus.emitEvent('memory:updated', { workspaceId, memoryType: 'long' });
+
+    return result;
+  }
+
+  // --------------------------------------------------------------------------
+  // Embedding Helpers
+  // --------------------------------------------------------------------------
+
+  /**
+   * Store an embedding vector for a memory entry.
+   * Called automatically when remember() succeeds and the embedding API is available.
+   */
+  private async storeEmbedding(
+    workspaceId: Id,
+    memoryId: Id,
+    text: string,
+  ): Promise<void> {
+    try {
+      const vector = await this.getEmbedding(text);
+      if (!vector) return;
+
+      const db = this.getDatabase(workspaceId);
+      db.prepare(`
+        INSERT OR REPLACE INTO embeddings (memory_id, workspace_id, vector, model, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(memoryId, workspaceId, JSON.stringify(vector), 'text-embedding-ada-002', Date.now());
+    } catch (err) {
+      // Non-fatal: embedding is a best-effort enhancement
+      logger.debug('Failed to store embedding', { memoryId, error: err });
+    }
+  }
+
+  /**
+   * Call the OpenAI-compatible embeddings API to get a vector for the given text.
+   * Returns null if the API is not configured or fails.
+   */
+  private async getEmbedding(text: string): Promise<number[] | null> {
+    // Read embedding config from environment or config
+    const models = config.get('models') ?? [];
+    const firstModel = models[0];
+    const baseUrl = process.env.JARVIS_EMBEDDING_BASE_URL
+      || process.env.JARVIS_API_BASE_URL
+      || firstModel?.baseUrl
+      || null;
+    const apiKey = process.env.JARVIS_EMBEDDING_API_KEY
+      || process.env.JARVIS_API_KEY
+      || firstModel?.apiKey
+      || null;
+    const model = process.env.JARVIS_EMBEDDING_MODEL || 'text-embedding-ada-002';
+
+    if (!baseUrl || !apiKey) {
+      return null;
+    }
+
+    const url = `${(baseUrl as string).replace(/\/+$/, '')}/embeddings`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model, input: text }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Embedding API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as {
+      data: Array<{ embedding: number[] }>;
+    };
+    return data.data?.[0]?.embedding ?? null;
   }
 
   // --------------------------------------------------------------------------
@@ -447,6 +817,13 @@ export class MemoryManager {
     // Initialize schema
     db.exec(SCHEMA_SQL);
 
+    // Run migrations (safe to re-run)
+    try {
+      db.exec(MIGRATION_IMPORTANCE_COLUMN);
+    } catch {
+      // Column already exists – ignore the error
+    }
+
     this.databases.set(workspaceId, db);
     logger.debug('Database initialized for workspace', { workspaceId, dbPath });
 
@@ -492,6 +869,33 @@ export class MemoryManager {
 }
 
 // ----------------------------------------------------------------------------
+// Vector Math Utilities
+// ----------------------------------------------------------------------------
+
+/**
+ * Compute the cosine similarity between two vectors of equal length.
+ * Returns a value between -1 and 1 (1 = identical direction).
+ */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) return 0;
+
+  return dotProduct / denominator;
+}
+
+// ----------------------------------------------------------------------------
 // Raw row types (as returned by better-sqlite3)
 // ----------------------------------------------------------------------------
 
@@ -512,6 +916,7 @@ interface RawMemoryRow {
   type: string;
   timestamp: number;
   metadata: string | null;
+  importance?: number | null;
 }
 
 interface RawEpisodeRow {

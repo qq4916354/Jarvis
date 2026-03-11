@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Play, Pause, Trash2, Clock, AlertCircle, Activity } from 'lucide-react';
+import { Plus, Play, Pause, Trash2, Clock, Activity, User } from 'lucide-react';
 import { api } from '../api';
 
 interface DigitalHuman {
@@ -65,145 +65,230 @@ export function DigitalHumansView() {
     setActivities(acts);
   };
 
-  const statusColors: Record<string, string> = {
-    active: 'text-green-500',
-    paused: 'text-yellow-500',
-    error: 'text-red-500',
-    disabled: 'text-[var(--color-text-muted)]',
+  const getStatusDotClass = (status: string) => {
+    if (status === 'active') return 'status-dot status-dot-active';
+    if (status === 'paused') return 'status-dot status-dot-warning';
+    if (status === 'error') return 'status-dot status-dot-error';
+    return 'status-dot status-dot-inactive';
+  };
+
+  const getStatusBadgeClass = (status: string) => {
+    if (status === 'active') return 'badge badge-success';
+    if (status === 'paused') return 'badge badge-warning';
+    if (status === 'error') return 'badge badge-error';
+    return 'badge';
+  };
+
+  const getAvatarGradient = (name: string) => {
+    const colors = [
+      'from-[#06d6a0] to-[#0ea5e9]',
+      'from-[#8b5cf6] to-[#06d6a0]',
+      'from-[#f59e0b] to-[#ef4444]',
+      'from-[#0ea5e9] to-[#8b5cf6]',
+    ];
+    return colors[name.charCodeAt(0) % colors.length];
   };
 
   return (
     <div className="flex h-full">
-      {/* List */}
+      {/* 左侧列表面板 */}
       <div className="w-80 border-r border-[var(--color-border)] flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
-          <h2 className="text-sm font-semibold">Digital Humans</h2>
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Digital Humans</h2>
           <button
             onClick={() => setIsCreating(true)}
-            className="p-1.5 rounded-lg bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]"
+            className="btn btn-primary p-1.5"
           >
             <Plus size={14} />
           </button>
         </div>
 
+        {/* 创建表单 */}
         {isCreating && (
-          <div className="p-4 border-b border-[var(--color-border)] space-y-2">
-            <input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="Name"
-              className="w-full px-3 py-1.5 text-sm rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-            />
-            <input
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="Description"
-              className="w-full px-3 py-1.5 text-sm rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-            />
-            <textarea
-              value={form.prompt}
-              onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-              placeholder="Prompt / Instructions"
-              rows={3}
-              className="w-full px-3 py-1.5 text-sm rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] resize-none"
-            />
-            <input
-              value={form.schedule}
-              onChange={(e) => setForm({ ...form, schedule: e.target.value })}
-              placeholder="Cron (e.g. 0 * * * *)"
-              className="w-full px-3 py-1.5 text-sm rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-            />
-            <div className="flex gap-2">
-              <button onClick={handleCreate} className="flex-1 py-1.5 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]">Create</button>
-              <button onClick={() => setIsCreating(false)} className="flex-1 py-1.5 text-xs rounded bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)]">Cancel</button>
+          <div className="p-4 border-b border-[var(--color-border)] animate-fadeIn">
+            <div className="card p-4 flex flex-col gap-2">
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="Name"
+                className="input"
+              />
+              <input
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="Description"
+                className="input"
+              />
+              <textarea
+                value={form.prompt}
+                onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+                placeholder="Prompt / Instructions"
+                rows={3}
+                className="input"
+                style={{ resize: 'none' }}
+              />
+              <input
+                value={form.schedule}
+                onChange={(e) => setForm({ ...form, schedule: e.target.value })}
+                placeholder="Cron (e.g. 0 * * * *)"
+                className="input"
+              />
+              <div className="flex gap-2 mt-1">
+                <button onClick={handleCreate} className="btn btn-primary flex-1 text-xs py-1.5">Create</button>
+                <button onClick={() => setIsCreating(false)} className="btn btn-ghost flex-1 text-xs py-1.5">Cancel</button>
+              </div>
             </div>
           </div>
         )}
 
+        {/* Digital Human 列表 */}
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {digitalHumans.map((dh) => (
+          {digitalHumans.map((dh, index) => (
             <div
               key={dh.id}
               onClick={() => handleSelect(dh)}
-              className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer text-sm transition-colors ${
+              className={`group card cursor-pointer transition-all animate-fadeInUp ${
                 selectedDH?.id === dh.id
-                  ? 'bg-[var(--color-primary)] text-white'
-                  : 'hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
-              }`}
+                  ? 'border-[var(--color-border-accent)] bg-[var(--color-bg-tertiary)]'
+                  : 'hover:border-[var(--color-border-accent)]'
+              } p-3`}
+              style={{ animationDelay: `${index * 50}ms` }}
             >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full ${dh.status === 'active' ? 'bg-green-500' : dh.status === 'paused' ? 'bg-yellow-500' : dh.status === 'error' ? 'bg-red-500' : 'bg-gray-400'}`} />
-                  <span className="truncate font-medium">{dh.name}</span>
+              <div className="flex items-center gap-2.5">
+                {/* 头像 */}
+                <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarGradient(dh.name)} flex items-center justify-center text-white text-sm font-bold shrink-0`}>
+                  {dh.name.charAt(0).toUpperCase()}
                 </div>
-                <p className={`text-xs truncate mt-0.5 ${selectedDH?.id === dh.id ? 'text-white/70' : 'text-[var(--color-text-muted)]'}`}>
-                  {dh.description}
-                </p>
-              </div>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                <button onClick={(e) => { e.stopPropagation(); handleToggleStatus(dh); }} className="p-1 rounded hover:bg-white/20">
-                  {dh.status === 'active' ? <Pause size={12} /> : <Play size={12} />}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); handleDelete(dh.id); }} className="p-1 rounded hover:bg-white/20">
-                  <Trash2 size={12} />
-                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className={getStatusDotClass(dh.status)} />
+                    <span className="truncate text-sm font-medium text-[var(--color-text)]">{dh.name}</span>
+                  </div>
+                  <p className="text-xs truncate mt-0.5 text-[var(--color-text-muted)]">
+                    {dh.description || 'No description'}
+                  </p>
+                </div>
+                {/* 操作按钮（hover 时显示） */}
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleToggleStatus(dh); }}
+                    className="btn btn-ghost p-1"
+                  >
+                    {dh.status === 'active' ? <Pause size={11} /> : <Play size={11} />}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDelete(dh.id); }}
+                    className="btn btn-danger p-1"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
+
           {digitalHumans.length === 0 && !isCreating && (
-            <p className="text-xs text-[var(--color-text-muted)] text-center py-8">
-              No digital humans configured.
-            </p>
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <User size={36} className="mb-3 text-[var(--color-text-muted)] opacity-30" />
+              <p className="text-sm text-[var(--color-text-muted)]">No digital humans configured.</p>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">Click + to create one</p>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Detail */}
+      {/* 右侧详情面板 */}
       <div className="flex-1 overflow-y-auto">
         {selectedDH ? (
-          <div className="p-6 space-y-6">
-            <div>
-              <h3 className="text-lg font-semibold">{selectedDH.name}</h3>
-              <p className="text-sm text-[var(--color-text-secondary)] mt-1">{selectedDH.description}</p>
+          <div className="p-6 space-y-5 animate-fadeIn">
+            {/* 详情头部 */}
+            <div className="flex items-center gap-3">
+              <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${getAvatarGradient(selectedDH.name)} flex items-center justify-center text-white text-xl font-bold`}>
+                {selectedDH.name.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-[var(--color-text)]">{selectedDH.name}</h3>
+                <p className="text-sm text-[var(--color-text-secondary)]">{selectedDH.description}</p>
+              </div>
+              <div className="ml-auto">
+                <span className={getStatusBadgeClass(selectedDH.status)}>{selectedDH.status}</span>
+              </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)]">
+
+            {/* 统计信息卡片 */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="card p-3">
                 <span className="text-xs text-[var(--color-text-muted)]">Status</span>
-                <p className={`text-sm font-medium mt-0.5 ${statusColors[selectedDH.status]}`}>{selectedDH.status}</p>
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span className={getStatusDotClass(selectedDH.status)} />
+                  <p className="text-sm font-medium text-[var(--color-text)] capitalize">{selectedDH.status}</p>
+                </div>
               </div>
-              <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)]">
+              <div className="card p-3">
                 <span className="text-xs text-[var(--color-text-muted)]">Schedule</span>
-                <p className="text-sm font-mono mt-0.5">{selectedDH.schedule}</p>
+                <p className="text-sm font-mono mt-1 text-[var(--color-text)]">{selectedDH.schedule}</p>
               </div>
-              <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)]">
+              <div className="card p-3">
                 <span className="text-xs text-[var(--color-text-muted)]">Last Run</span>
-                <p className="text-sm mt-0.5">{selectedDH.lastRunAt ? new Date(selectedDH.lastRunAt).toLocaleString() : 'Never'}</p>
+                <p className="text-xs mt-1 text-[var(--color-text)]">
+                  {selectedDH.lastRunAt ? new Date(selectedDH.lastRunAt).toLocaleString() : 'Never'}
+                </p>
               </div>
             </div>
-            <div>
-              <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                <Activity size={14} /> Activity Log
+
+            {/* 活动日志 */}
+            <div className="card-glow p-4">
+              <h4 className="text-sm font-semibold mb-3 flex items-center gap-2 text-[var(--color-text)]">
+                <Activity size={14} className="text-[var(--color-primary)]" />
+                Activity Log
               </h4>
-              <div className="space-y-1">
-                {activities.map((act) => (
-                  <div key={act.id} className="flex items-center gap-3 px-3 py-2 rounded bg-[var(--color-bg-secondary)] text-xs">
-                    <span className={`w-2 h-2 rounded-full ${act.outcome === 'success' ? 'bg-green-500' : act.outcome === 'error' ? 'bg-red-500' : 'bg-gray-400'}`} />
-                    <span className="text-[var(--color-text-muted)]">{new Date(act.timestamp).toLocaleString()}</span>
-                    <span className="flex-1 truncate">{act.output || act.error || act.outcome}</span>
-                    <span className="text-[var(--color-text-muted)]">{act.durationMs}ms</span>
-                  </div>
-                ))}
-                {activities.length === 0 && (
-                  <p className="text-xs text-[var(--color-text-muted)] py-4 text-center">No activity yet</p>
-                )}
-              </div>
+              {activities.length > 0 ? (
+                <div className="relative space-y-1 pl-4">
+                  {/* 时间轴连接线 */}
+                  <div className="absolute left-1.5 top-2 bottom-2 w-px bg-[var(--color-border)]" />
+                  {activities.map((act) => (
+                    <div key={act.id} className="relative flex items-start gap-3 py-2">
+                      {/* 时间轴节点 */}
+                      <span
+                        className={`absolute -left-2.5 mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+                          act.outcome === 'success' ? 'bg-[#22c55e]' :
+                          act.outcome === 'error' ? 'bg-[#ef4444]' : 'bg-[var(--color-text-muted)]'
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[11px] text-[var(--color-text-muted)]">
+                            {new Date(act.timestamp).toLocaleString()}
+                          </span>
+                          <span className={`badge text-[10px] ${act.outcome === 'success' ? 'badge-success' : act.outcome === 'error' ? 'badge-error' : ''}`}>
+                            {act.outcome}
+                          </span>
+                          <span className="text-[11px] text-[var(--color-text-muted)] ml-auto">{act.durationMs}ms</span>
+                        </div>
+                        {(act.output || act.error) && (
+                          <p className="text-xs text-[var(--color-text-secondary)] mt-0.5 truncate">
+                            {act.output || act.error}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <Clock size={28} className="mb-2 text-[var(--color-text-muted)] opacity-30" />
+                  <p className="text-sm text-[var(--color-text-muted)]">No activity yet</p>
+                </div>
+              )}
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-full text-[var(--color-text-muted)]">
-            <div className="text-center">
-              <Clock size={48} className="mx-auto mb-4 opacity-30" />
-              <p>Select a digital human to view details</p>
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center animate-fadeIn">
+              <div className="w-16 h-16 rounded-full bg-[var(--color-bg-tertiary)] flex items-center justify-center mx-auto mb-4">
+                <User size={32} className="text-[var(--color-text-muted)] opacity-40" />
+              </div>
+              <p className="text-[var(--color-text-muted)]">Select a digital human to view details</p>
             </div>
           </div>
         )}

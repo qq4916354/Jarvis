@@ -4,6 +4,10 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./browser": "./dist/browser/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
@@ -12,19 +16,20 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "openai": "^4.70.0",
     "better-sqlite3": "^11.0.0",
-    "ws": "^8.18.0",
+    "eventemitter3": "^5.0.1",
     "node-cron": "^3.0.3",
-    "winston": "^3.14.0",
+    "openai": "^4.70.0",
+    "playwright": "^1.58.2",
     "uuid": "^10.0.0",
-    "eventemitter3": "^5.0.1"
+    "winston": "^3.14.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
-    "@types/ws": "^8.5.0",
     "@types/node-cron": "^3.0.0",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.0",
     "typescript": "^5.7.0"
   }
 }
