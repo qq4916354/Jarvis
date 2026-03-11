@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Save, RotateCw, Play, Square, Link, Unlink } from 'lucide-react';
 import { useWorkspaceStore } from '../stores/workspace-store';
+import { api } from '../api';
 
 export function SettingsView() {
   const { activeWorkspace } = useWorkspaceStore();
@@ -13,7 +14,7 @@ export function SettingsView() {
   if (!activeWorkspace) return null;
 
   const handleSave = async () => {
-    await window.jarvis.workspace.update(activeWorkspace.id, {
+    await api.workspace.update(activeWorkspace.id, {
       goal,
       loopMode: { enabled: loopEnabled, intervalMinutes: loopInterval },
       larkChatId: larkChatId || undefined,
@@ -25,19 +26,19 @@ export function SettingsView() {
     setLoopEnabled(newEnabled);
 
     if (newEnabled) {
-      await window.jarvis.loop.start(activeWorkspace.id, {
+      await api.loop.start(activeWorkspace.id, {
         enabled: true,
         intervalMinutes: loopInterval,
         goal,
       });
     } else {
-      await window.jarvis.loop.stop(activeWorkspace.id);
+      await api.loop.stop(activeWorkspace.id);
     }
   };
 
   const handleBindLark = async () => {
     if (larkChatId) {
-      await window.jarvis.lark.bind(activeWorkspace.id, larkChatId);
+      await api.lark.bind(activeWorkspace.id, larkChatId);
     }
   };
 

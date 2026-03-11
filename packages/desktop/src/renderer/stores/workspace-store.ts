@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { api } from '../api';
 
 export interface WorkspaceConfig {
   id: string;
@@ -86,7 +87,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   loadWorkspaces: async () => {
     try {
-      const workspaces = await window.jarvis.workspace.list();
+      const workspaces = await api.workspace.list();
       set({ workspaces });
     } catch (err) {
       console.error('Failed to load workspaces:', err);
@@ -95,7 +96,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   createWorkspace: async (name, description) => {
     try {
-      const workspace = await window.jarvis.workspace.create({ name, description });
+      const workspace = await api.workspace.create({ name, description });
       get().addWorkspace(workspace);
       get().setActiveWorkspace(workspace);
     } catch (err) {
@@ -105,7 +106,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   deleteWorkspace: async (id) => {
     try {
-      await window.jarvis.workspace.delete(id);
+      await api.workspace.delete(id);
       get().removeWorkspace(id);
     } catch (err) {
       console.error('Failed to delete workspace:', err);
@@ -129,13 +130,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     try {
       // Set up chunk listener
-      const unsubscribe = window.jarvis.agent.onChunk((data: any) => {
+      const unsubscribe = api.agent.onChunk((data: any) => {
         if (data.workspaceId === activeWorkspace.id) {
           get().appendStreamContent(data.chunk);
         }
       });
 
-      const response = await window.jarvis.agent.chat(activeWorkspace.id, content);
+      const response = await api.agent.chat(activeWorkspace.id, content);
 
       unsubscribe();
 
@@ -157,7 +158,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   loadMessages: async (workspaceId) => {
     try {
-      const messages = await window.jarvis.memory.getRecent(workspaceId, 100);
+      const messages = await api.memory.getRecent(workspaceId, 100);
       set({ messages });
     } catch (err) {
       console.error('Failed to load messages:', err);

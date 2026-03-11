@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Zap, Plus, RefreshCw, Trash2, Download } from 'lucide-react';
+import { api } from '../api';
 
 interface SkillInfo {
   name: string;
@@ -21,7 +22,7 @@ export function SkillsView() {
 
   const loadSkills = async () => {
     try {
-      const result = await window.jarvis.skills.list();
+      const result = await api.skills.list();
       setSkills(result || []);
     } catch { /* ignore */ }
   };
@@ -30,7 +31,7 @@ export function SkillsView() {
     if (!genDesc.trim()) return;
     setIsGenerating(true);
     try {
-      await window.jarvis.skills.generate(genDesc);
+      await api.skills.generate(genDesc);
       setGenDesc('');
       setMode('list');
       await loadSkills();
@@ -44,7 +45,7 @@ export function SkillsView() {
   const handleInstall = async () => {
     if (!installName.trim() || !installContent.trim()) return;
     try {
-      await window.jarvis.skills.install(installName, installContent);
+      await api.skills.install(installName, installContent);
       setInstallName('');
       setInstallContent('');
       setMode('list');

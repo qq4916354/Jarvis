@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Wrench, Plus, RefreshCw, Play } from 'lucide-react';
 import { useWorkspaceStore } from '../stores/workspace-store';
+import { api } from '../api';
 
 interface ToolInfo {
   name: string;
@@ -20,7 +21,7 @@ export function ToolsView() {
 
   const loadTools = async () => {
     try {
-      const result = await window.jarvis.tools.list(activeWorkspace?.id);
+      const result = await api.tools.list(activeWorkspace?.id);
       setTools(result || []);
     } catch { /* ignore */ }
   };
@@ -29,7 +30,7 @@ export function ToolsView() {
     if (!newToolDesc.trim() || !activeWorkspace) return;
     setIsGenerating(true);
     try {
-      await window.jarvis.upgrade.generateTool({
+      await api.upgrade.generateTool({
         description: newToolDesc,
         workspaceId: activeWorkspace.id,
       });

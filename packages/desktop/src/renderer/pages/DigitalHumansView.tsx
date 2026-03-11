@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Play, Pause, Trash2, Clock, AlertCircle, Activity } from 'lucide-react';
+import { api } from '../api';
 
 interface DigitalHuman {
   id: string;
@@ -34,13 +35,13 @@ export function DigitalHumansView() {
   }, []);
 
   const loadDigitalHumans = async () => {
-    const list = await (window as any).jarvis.digitalHumans.list();
+    const list = await api.digitalHumans.list();
     setDigitalHumans(list);
   };
 
   const handleCreate = async () => {
     if (!form.name.trim() || !form.prompt.trim()) return;
-    await (window as any).jarvis.digitalHumans.create(form);
+    await api.digitalHumans.create(form);
     setForm({ name: '', description: '', prompt: '', schedule: '0 * * * *' });
     setIsCreating(false);
     loadDigitalHumans();
@@ -48,19 +49,19 @@ export function DigitalHumansView() {
 
   const handleToggleStatus = async (dh: DigitalHuman) => {
     const newStatus = dh.status === 'active' ? 'paused' : 'active';
-    await (window as any).jarvis.digitalHumans.update(dh.id, { status: newStatus });
+    await api.digitalHumans.update(dh.id, { status: newStatus });
     loadDigitalHumans();
   };
 
   const handleDelete = async (id: string) => {
-    await (window as any).jarvis.digitalHumans.delete(id);
+    await api.digitalHumans.delete(id);
     if (selectedDH?.id === id) setSelectedDH(null);
     loadDigitalHumans();
   };
 
   const handleSelect = async (dh: DigitalHuman) => {
     setSelectedDH(dh);
-    const acts = await (window as any).jarvis.digitalHumans.activity(dh.id, 20);
+    const acts = await api.digitalHumans.activity(dh.id, 20);
     setActivities(acts);
   };
 

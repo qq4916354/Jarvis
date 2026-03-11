@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Eye, EyeOff, Check, X } from 'lucide-react';
+import { api } from '../api';
 
 interface ProviderModel {
   id: string;
@@ -29,7 +30,7 @@ export function ProvidersView() {
   }, []);
 
   const loadProviders = async () => {
-    const list = await (window as any).jarvis.providers.list();
+    const list = await api.providers.list();
     setProviders(list);
   };
 
@@ -40,7 +41,7 @@ export function ProvidersView() {
 
   const saveEdit = async () => {
     if (!editingId) return;
-    await (window as any).jarvis.providers.update(editingId, editForm);
+    await api.providers.update(editingId, editForm);
     setEditingId(null);
     loadProviders();
   };

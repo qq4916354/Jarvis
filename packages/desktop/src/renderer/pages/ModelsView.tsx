@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, Save, TestTube } from 'lucide-react';
 import { useWorkspaceStore } from '../stores/workspace-store';
+import { api } from '../api';
 
 interface ModelEntry {
   purpose: string;
@@ -34,7 +35,7 @@ export function ModelsView() {
   const loadModels = async () => {
     if (!activeWorkspace) return;
     try {
-      const config = await window.jarvis.models.getConfig(activeWorkspace.id);
+      const config = await api.models.getConfig(activeWorkspace.id);
       if (config) {
         const entries = Object.entries(config).map(([purpose, cfg]: [string, any]) => ({
           purpose,
@@ -84,7 +85,7 @@ export function ModelsView() {
       };
     }
 
-    await window.jarvis.models.setConfig(activeWorkspace.id, config);
+    await api.models.setConfig(activeWorkspace.id, config);
   };
 
   if (!activeWorkspace) return null;

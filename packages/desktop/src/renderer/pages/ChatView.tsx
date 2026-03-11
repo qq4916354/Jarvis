@@ -4,6 +4,7 @@ import { useWorkspaceStore, Message } from '../stores/workspace-store';
 import { ThinkingProcess } from '../components/ThinkingProcess';
 import { ToolCallDisplay, ToolCallInfo } from '../components/ToolCallDisplay';
 import { ArtifactPanel } from '../components/ArtifactPanel';
+import { api } from '../api';
 
 export function ChatView() {
   const {
@@ -30,17 +31,14 @@ export function ChatView() {
 
   // Subscribe to CC session events
   useEffect(() => {
-    const jarvis = (window as any).jarvis;
-    if (!jarvis?.cc) return;
-
     const unsubs: (() => void)[] = [];
 
-    unsubs.push(jarvis.cc.onMessage((data: { workspaceId: string; text: string }) => {
+    unsubs.push(api.cc.onMessage((data: { workspaceId: string; text: string }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setCcContent((prev) => prev + data.text);
     }));
 
-    unsubs.push(jarvis.cc.onThinking((data: { workspaceId: string; text: string }) => {
+    unsubs.push(api.cc.onThinking((data: { workspaceId: string; text: string }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setIsThinking(true);
       setThoughts((prev) => {
@@ -52,7 +50,7 @@ export function ChatView() {
       });
     }));
 
-    unsubs.push(jarvis.cc.onToolUse((data: { workspaceId: string; name: string; input: any }) => {
+    unsubs.push(api.cc.onToolUse((data: { workspaceId: string; name: string; input: any }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setIsThinking(false);
       const tc: ToolCallInfo = {
@@ -64,7 +62,7 @@ export function ChatView() {
       setToolCalls((prev) => [...prev, tc]);
     }));
 
-    unsubs.push(jarvis.cc.onToolResult((data: { workspaceId: string; name: string; content: string }) => {
+    unsubs.push(api.cc.onToolResult((data: { workspaceId: string; name: string; content: string }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setToolCalls((prev) =>
         prev.map((tc) =>
@@ -73,24 +71,23 @@ export function ChatView() {
             : tc
         )
       );
-      // Start new thinking block for next iteration
       setThoughts((prev) => [...prev, '']);
       setIsThinking(true);
     }));
 
-    unsubs.push(jarvis.cc.onResult((data: { workspaceId: string; text: string; sessionId: string }) => {
+    unsubs.push(api.cc.onResult((data: { workspaceId: string; text: string; sessionId: string }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setCcStreaming(false);
       setIsThinking(false);
     }));
 
-    unsubs.push(jarvis.cc.onError((data: { workspaceId: string; error: string }) => {
+    unsubs.push(api.cc.onError((data: { workspaceId: string; error: string }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setCcStreaming(false);
       setIsThinking(false);
     }));
 
-    unsubs.push(jarvis.cc.onDone((data: { workspaceId: string; code: number | null }) => {
+    unsubs.push(api.cc.onDone((data: { workspaceId: string; code: number | null }) => {
       if (data.workspaceId !== activeWorkspace?.id) return;
       setCcStreaming(false);
       setIsThinking(false);
@@ -112,15 +109,12 @@ export function ChatView() {
     setCcContent('');
     setIsThinking(false);
 
-    const jarvis = (window as any).jarvis;
-    if (jarvis?.cc && activeWorkspace) {
-      // Use CC subprocess agent loop
+    if (activeWorkspace) {
       setCcStreaming(true);
-      jarvis.cc.send(activeWorkspace.id, text).catch((err: Error) => {
+      api.cc.send(activeWorkspace.id, text)?.catch((err: Error) => {
         console.error('CC send failed:', err);
         setCcStreaming(false);
       });
-      // Also store in memory via legacy path
       sendMessage(text);
     } else {
       sendMessage(text);
@@ -128,9 +122,8 @@ export function ChatView() {
   }, [input, isStreaming, ccStreaming, activeWorkspace, sendMessage]);
 
   const handleAbort = useCallback(() => {
-    const jarvis = (window as any).jarvis;
-    if (jarvis?.cc && activeWorkspace) {
-      jarvis.cc.abort(activeWorkspace.id);
+    if (activeWorkspace) {
+      api.cc.abort(activeWorkspace.id);
       setCcStreaming(false);
       setIsThinking(false);
     }
@@ -146,7 +139,7 @@ export function ChatView() {
   const handleSelectArtifact = async (filePath: string) => {
     setSelectedArtifactPath(filePath);
     try {
-      const content = await (window as any).jarvis.artifacts?.content(filePath);
+      const content = await api.artifacts.content(filePath);
       setArtifactContent(content);
     } catch {
       setArtifactContent(null);
