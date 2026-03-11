@@ -45,11 +45,3 @@ html, body, #root {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
-
-/* Titlebar drag region */
-.titlebar-drag {
-  -webkit-app-region: drag;
-}
-.titlebar-no-drag {
-  -webkit-app-region: no-drag;
-}

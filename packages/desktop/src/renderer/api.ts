@@ -1,160 +1,250 @@
 /**
- * Unified API adapter - works in both Electron (IPC) and browser (mock) modes.
+ * Unified API adapter - HTTP + WebSocket transport for pure web mode.
  *
- * In Electron, window.jarvis is injected by preload.
- * In browser, we provide a stub that returns sensible defaults so the UI renders
- * without errors. A future HTTP backend can replace the stubs.
+ * All calls go through the Jarvis API server (HTTP REST + WebSocket for streaming).
+ * No Electron IPC dependency.
  */
 
-function getIPC(): any | null {
-  return typeof window !== 'undefined' && (window as any).jarvis
-    ? (window as any).jarvis
-    : null;
-}
+// ─── Configuration ───────────────────────────────────────────────
 
-export function isElectron(): boolean {
-  return getIPC() !== null;
-}
+const API_BASE = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:3927`;
+const WS_URL = (import.meta as any).env?.VITE_WS_URL || `ws://${window.location.hostname}:3927`;
 
-// ---------------------------------------------------------------------------
-// Helpers: wrap IPC calls with fallback
-// ---------------------------------------------------------------------------
+// ─── HTTP helpers ────────────────────────────────────────────────
 
-async function invoke<T>(path: string, fallback: T, ...args: any[]): Promise<T> {
-  const ipc = getIPC();
-  if (!ipc) return fallback;
-
-  const parts = path.split('.');
-  let target: any = ipc;
-  for (const p of parts) {
-    target = target?.[p];
+async function get<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`);
+    if (!res.ok) return fallback;
+    return await res.json();
+  } catch (err) {
+    console.warn(`[api] GET ${path} failed:`, err);
+    return fallback;
   }
+}
 
-  if (typeof target === 'function') {
-    try {
-      return await target(...args);
-    } catch (err) {
-      console.warn(`[api] ${path} failed:`, err);
-      return fallback;
+async function post<T>(path: string, body: any, fallback: T): Promise<T> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return fallback;
+    return await res.json();
+  } catch (err) {
+    console.warn(`[api] POST ${path} failed:`, err);
+    return fallback;
+  }
+}
+
+async function put<T>(path: string, body: any, fallback: T): Promise<T> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return fallback;
+    return await res.json();
+  } catch (err) {
+    console.warn(`[api] PUT ${path} failed:`, err);
+    return fallback;
+  }
+}
+
+async function del<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE' });
+    if (!res.ok) return fallback;
+    return await res.json();
+  } catch (err) {
+    console.warn(`[api] DELETE ${path} failed:`, err);
+    return fallback;
+  }
+}
+
+// ─── WebSocket singleton ─────────────────────────────────────────
+
+type EventCallback = (data: any) => void;
+
+class WebSocketManager {
+  private ws: WebSocket | null = null;
+  private listeners = new Map<string, Set<EventCallback>>();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelay = 1000;
+
+  connect() {
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
+      return;
     }
-  }
-  return fallback;
-}
 
-function listen(path: string, callback: (...args: any[]) => void): () => void {
-  const ipc = getIPC();
-  if (!ipc) return () => {};
-
-  const parts = path.split('.');
-  let target: any = ipc;
-  for (const p of parts) {
-    target = target?.[p];
-  }
-
-  if (typeof target === 'function') {
     try {
-      return target(callback) || (() => {});
+      this.ws = new WebSocket(WS_URL);
+
+      this.ws.onopen = () => {
+        console.log('[WS] Connected to', WS_URL);
+        this.reconnectDelay = 1000;
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          const type = msg.type as string;
+          const handlers = this.listeners.get(type);
+          if (handlers) {
+            for (const handler of handlers) {
+              handler(msg);
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      };
+
+      this.ws.onclose = () => {
+        this.scheduleReconnect();
+      };
+
+      this.ws.onerror = () => {
+        this.ws?.close();
+      };
     } catch {
-      return () => {};
+      this.scheduleReconnect();
     }
   }
-  return () => {};
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+      this.connect();
+    }, this.reconnectDelay);
+  }
+
+  on(type: string, callback: EventCallback): () => void {
+    if (!this.listeners.has(type)) {
+      this.listeners.set(type, new Set());
+    }
+    this.listeners.get(type)!.add(callback);
+
+    // Ensure connected
+    this.connect();
+
+    return () => {
+      this.listeners.get(type)?.delete(callback);
+    };
+  }
+
+  send(data: any) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(data));
+    }
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+const wsManager = new WebSocketManager();
+
+// ─── Public API ──────────────────────────────────────────────────
 
 export const api = {
   workspace: {
-    list: () => invoke<any[]>('workspace.list', []),
-    create: (input: any) => invoke<any>('workspace.create', null, input),
-    update: (id: string, updates: any) => invoke<any>('workspace.update', null, id, updates),
-    delete: (id: string) => invoke<boolean>('workspace.delete', false, id),
+    list: () => get<any[]>('/api/workspaces', []),
+    create: (input: any) => post<any>('/api/workspaces', input, null),
+    update: (id: string, updates: any) => put<any>(`/api/workspaces/${id}`, updates, null),
+    delete: (id: string) => del<boolean>(`/api/workspaces/${id}`, false),
   },
 
   agent: {
     chat: (workspaceId: string, content: string) =>
-      invoke<string>('agent.chat', '', workspaceId, content),
-    onChunk: (cb: (data: any) => void) => listen('agent.onChunk', cb),
+      post<string>('/api/agent/chat', { workspaceId, message: content }, ''),
+    onChunk: (cb: (data: any) => void) => wsManager.on('agent:chunk', cb),
   },
 
   cc: {
     send: (workspaceId: string, message: string, options?: any) =>
-      invoke<any>('cc.send', null, workspaceId, message, options),
-    abort: (workspaceId: string) => invoke<void>('cc.abort', undefined, workspaceId),
-    newSession: (workspaceId: string) => invoke<any>('cc.newSession', null, workspaceId),
-    onMessage: (cb: (data: any) => void) => listen('cc.onMessage', cb),
-    onThinking: (cb: (data: any) => void) => listen('cc.onThinking', cb),
-    onToolUse: (cb: (data: any) => void) => listen('cc.onToolUse', cb),
-    onToolResult: (cb: (data: any) => void) => listen('cc.onToolResult', cb),
-    onResult: (cb: (data: any) => void) => listen('cc.onResult', cb),
-    onError: (cb: (data: any) => void) => listen('cc.onError', cb),
-    onDone: (cb: (data: any) => void) => listen('cc.onDone', cb),
+      post<any>('/api/cc/send', { workspaceId, message, options }, null),
+    abort: (workspaceId: string) =>
+      post<void>('/api/cc/abort', { workspaceId }, undefined),
+    newSession: (workspaceId: string) =>
+      post<any>('/api/cc/newSession', { workspaceId }, null),
+    onMessage: (cb: (data: any) => void) => wsManager.on('cc:message', cb),
+    onThinking: (cb: (data: any) => void) => wsManager.on('cc:thinking', cb),
+    onToolUse: (cb: (data: any) => void) => wsManager.on('cc:tool_use', cb),
+    onToolResult: (cb: (data: any) => void) => wsManager.on('cc:tool_result', cb),
+    onResult: (cb: (data: any) => void) => wsManager.on('cc:result', cb),
+    onError: (cb: (data: any) => void) => wsManager.on('cc:error', cb),
+    onDone: (cb: (data: any) => void) => wsManager.on('cc:done', cb),
   },
 
   memory: {
     getRecent: (workspaceId: string, limit: number) =>
-      invoke<any[]>('memory.getRecent', [], workspaceId, limit),
+      post<any[]>('/api/memory/recent', { workspaceId, limit }, []),
   },
 
   models: {
-    getConfig: (workspaceId: string) => invoke<any>('models.getConfig', null, workspaceId),
+    getConfig: (workspaceId: string) =>
+      post<any>('/api/models/config', { workspaceId }, null),
     setConfig: (workspaceId: string, config: any) =>
-      invoke<void>('models.setConfig', undefined, workspaceId, config),
+      post<void>('/api/models/setConfig', { workspaceId, config }, undefined),
   },
 
   tools: {
-    list: (workspaceId?: string) => invoke<any[]>('tools.list', [], workspaceId),
+    list: (workspaceId?: string) =>
+      get<any[]>(`/api/tools${workspaceId ? `?workspaceId=${workspaceId}` : ''}`, []),
   },
 
   skills: {
-    list: () => invoke<any[]>('skills.list', []),
-    generate: (desc: string) => invoke<void>('skills.generate', undefined, desc),
+    list: () => get<any[]>('/api/skills', []),
+    generate: (desc: string) =>
+      post<void>('/api/skills/generate', { description: desc }, undefined),
     install: (name: string, content: string) =>
-      invoke<void>('skills.install', undefined, name, content),
+      post<void>('/api/skills/install', { name, content }, undefined),
   },
 
   upgrade: {
-    generateTool: (opts: any) => invoke<void>('upgrade.generateTool', undefined, opts),
+    generateTool: (opts: any) =>
+      post<void>('/api/upgrade/generateTool', opts, undefined),
   },
 
   loop: {
     start: (workspaceId: string, config: any) =>
-      invoke<void>('loop.start', undefined, workspaceId, config),
-    stop: (workspaceId: string) => invoke<void>('loop.stop', undefined, workspaceId),
+      post<void>('/api/loop/start', { workspaceId, config }, undefined),
+    stop: (workspaceId: string) =>
+      post<void>('/api/loop/stop', { workspaceId }, undefined),
   },
 
   lark: {
     bind: (workspaceId: string, chatId: string) =>
-      invoke<void>('lark.bind', undefined, workspaceId, chatId),
+      post<void>('/api/lark/bind', { workspaceId, chatId }, undefined),
   },
 
   digitalHumans: {
-    list: () => invoke<any[]>('digitalHumans.list', []),
-    create: (input: any) => invoke<any>('digitalHumans.create', null, input),
-    update: (id: string, updates: any) => invoke<any>('digitalHumans.update', null, id, updates),
-    delete: (id: string) => invoke<boolean>('digitalHumans.delete', false, id),
+    list: () => get<any[]>('/api/digital-humans', []),
+    create: (input: any) => post<any>('/api/digital-humans', input, null),
+    update: (id: string, updates: any) => put<any>(`/api/digital-humans/${id}`, updates, null),
+    delete: (id: string) => del<boolean>(`/api/digital-humans/${id}`, false),
     activity: (id: string, limit?: number) =>
-      invoke<any[]>('digitalHumans.activity', [], id, limit),
+      get<any[]>(`/api/digital-humans/${id}/activity?limit=${limit || 20}`, []),
   },
 
   providers: {
-    list: () => invoke<any[]>('providers.list', []),
-    update: (id: string, updates: any) => invoke<any>('providers.update', null, id, updates),
-    models: () => invoke<any[]>('providers.models', []),
+    list: () => get<any[]>('/api/providers', []),
+    update: (id: string, updates: any) => put<any>(`/api/providers/${id}`, updates, null),
+    models: () => get<any[]>('/api/providers/models', []),
   },
 
   artifacts: {
-    list: (workspaceId: string) => invoke<any[]>('artifacts.list', [], workspaceId),
-    content: (filePath: string) => invoke<string | null>('artifacts.content', null, filePath),
+    list: (workspaceId: string) =>
+      post<any[]>('/api/artifacts', { workspaceId }, []),
+    content: (filePath: string) =>
+      post<string | null>('/api/artifacts/content', { filePath }, null),
   },
 
   browser: {
-    open: (url?: string) => invoke<any>('browser.open', null, url),
-    navigate: (url: string) => invoke<any>('browser.navigate', null, url),
-    state: () => invoke<any>('browser.state', null),
-    screenshot: () => invoke<string | null>('browser.screenshot', null),
-    close: () => invoke<void>('browser.close', undefined),
+    open: (_url?: string) => Promise.resolve(null),
+    navigate: (_url: string) => Promise.resolve(null),
+    state: () => Promise.resolve(null),
+    screenshot: () => Promise.resolve(null),
+    close: () => Promise.resolve(undefined),
   },
 };

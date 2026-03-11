@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist/server",
+    "rootDir": "src/server",
+    "composite": true,
+    "module": "commonjs",
+    "moduleResolution": "node"
+  },
+  "include": ["src/server/**/*"],
+  "references": [{ "path": "../core" }]
+}

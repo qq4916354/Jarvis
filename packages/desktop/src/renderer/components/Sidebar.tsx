@@ -73,8 +73,8 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
       style={{ width: 'var(--sidebar-width)' }}
     >
       {/* Header */}
-      <div className="titlebar-drag h-12 flex items-center px-4 border-b border-[var(--color-border)]">
-        <span className="titlebar-no-drag text-base font-bold text-[var(--color-primary)]">
+      <div className="h-12 flex items-center px-4 border-b border-[var(--color-border)]">
+        <span className="text-base font-bold text-[var(--color-primary)]">
           Jarvis
         </span>
       </div>

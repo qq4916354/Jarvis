@@ -23,9 +23,9 @@ export function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden" style={{ marginLeft: 'var(--sidebar-width)' }}>
-        {/* Titlebar */}
-        <header className="titlebar-drag h-12 flex items-center px-4 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] shrink-0">
-          <div className="titlebar-no-drag flex items-center gap-3">
+        {/* Header */}
+        <header className="h-12 flex items-center px-4 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] shrink-0">
+          <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold">
               {activeWorkspace?.name || 'Jarvis'}
             </h1>

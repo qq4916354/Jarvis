@@ -5,7 +5,7 @@
   },
   "include": [],
   "references": [
-    { "path": "./tsconfig.main.json" },
+    { "path": "./tsconfig.server.json" },
     { "path": "./tsconfig.renderer.json" },
     { "path": "../core" }
   ]
