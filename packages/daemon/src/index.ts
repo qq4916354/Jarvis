@@ -15,6 +15,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { watch } from 'chokidar';
 import { createLogger, format, transports } from 'winston';
+import { EvolutionCoordinator, EvolutionConfig } from './evolution-coordinator';
 
 // ─── Configuration ───────────────────────────────────────────────
 
@@ -84,6 +85,7 @@ class JarvisDaemon {
   private errorWatcher: ReturnType<typeof watch> | null = null;
   private recentErrors: string[] = [];
   private isFixing = false;
+  private evolutionCoordinator: EvolutionCoordinator | null = null;
 
   constructor() {
     this.config = this.loadConfig();
@@ -107,6 +109,7 @@ class JarvisDaemon {
     const shutdown = async (signal: string) => {
       logger.info(`Received ${signal}, shutting down...`);
       this.isShuttingDown = true;
+      await this.stopEvolution();
       await this.stopDesktop();
       this.stopHealthCheck();
       this.stopErrorWatcher();
@@ -411,6 +414,68 @@ Only modify files that are directly related to the error.`;
     }
   }
 
+  // ─── Evolution Coordinator ─────────────────────────────────
+
+  private initEvolutionCoordinator() {
+    const evoConfigPath = join(JARVIS_HOME, 'evolution', 'config.json');
+    let evoConfig: EvolutionConfig = {
+      enabled: true,
+      loopIntervalMinutes: 15,
+      maxConcurrent: 1,
+      planning: {
+        anthropicAuthToken: '',
+        anthropicBaseUrl: 'https://api.anthropic.com',
+        model: 'claude-haiku-4-5-20251001',
+      },
+      execution: {
+        anthropicAuthToken: '',
+        anthropicBaseUrl: 'https://api.anthropic.com',
+        model: 'claude-sonnet-4-6',
+      },
+      sourceDir: join(__dirname, '..', '..', '..'),
+      worktreeBaseDir: join(JARVIS_HOME, 'evolution', 'worktrees'),
+      maxHistoryRecords: 100,
+    };
+
+    try {
+      if (existsSync(evoConfigPath)) {
+        const raw = JSON.parse(readFileSync(evoConfigPath, 'utf-8'));
+        evoConfig = { ...evoConfig, ...raw };
+      }
+    } catch (e) {
+      logger.warn(`Failed to load evolution config: ${e}`);
+    }
+
+    this.evolutionCoordinator = new EvolutionCoordinator(evoConfig, {
+      stopDesktop: () => this.stopDesktop(),
+      startDesktop: () => this.startDesktop(),
+      log: (message: string) => logger.info(`[Evolution] ${message}`),
+    });
+
+    this.evolutionCoordinator.on('status', (status: any) => {
+      logger.debug(`[Evolution] Status update: phase=${status.phase} progress=${status.progress}`);
+    });
+  }
+
+  private async startEvolution() {
+    if (!this.evolutionCoordinator) {
+      this.initEvolutionCoordinator();
+    }
+    try {
+      await this.evolutionCoordinator!.start();
+      logger.info('Evolution coordinator started');
+    } catch (err) {
+      logger.error(`Failed to start evolution coordinator: ${err}`);
+    }
+  }
+
+  private async stopEvolution() {
+    if (this.evolutionCoordinator) {
+      await this.evolutionCoordinator.stop();
+      logger.info('Evolution coordinator stopped');
+    }
+  }
+
   // ─── Main Entry ──────────────────────────────────────────────
 
   async start() {
@@ -422,6 +487,7 @@ Only modify files that are directly related to the error.`;
     this.startHealthCheck();
     this.startErrorWatcher();
     await this.startDesktop();
+    await this.startEvolution();
 
     logger.info('Jarvis Daemon is running.');
   }
