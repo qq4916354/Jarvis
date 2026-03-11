@@ -17,7 +17,11 @@ import { homedir } from 'os';
 
 const JARVIS_HOME = process.env.JARVIS_HOME || join(homedir(), '.jarvis');
 const PORT = parseInt(process.env.JARVIS_PORT || process.env.JARVIS_WEB_PORT || '3927', 10);
-const STATIC_DIR = join(__dirname, '..', 'renderer');
+// Resolve static dir: check dist/renderer first (production build), fall back to __dirname/../renderer
+const PACKAGE_ROOT = join(__dirname, '..', '..');
+const STATIC_DIR = existsSync(join(PACKAGE_ROOT, 'dist', 'renderer', 'index.html'))
+  ? join(PACKAGE_ROOT, 'dist', 'renderer')
+  : join(__dirname, '..', 'renderer');
 const isDev = process.env.NODE_ENV !== 'production';
 
 // ─── State ───────────────────────────────────────────────────────
